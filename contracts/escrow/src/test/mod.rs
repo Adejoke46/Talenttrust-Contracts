@@ -50,6 +50,7 @@ mod governance_proposal;
 mod simulate_create_contract;
 mod simulate_deposit;
 mod simulate_release;
+mod storage_validation_compat;
 mod token_scale;
 mod ttl_tests;
 
