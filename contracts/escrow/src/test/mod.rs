@@ -49,6 +49,7 @@ mod lifecycle_invariants;
 mod governance_proposal;
 mod simulate_create_contract;
 mod simulate_deposit;
+mod simulate_refund;
 mod simulate_release;
 mod token_scale;
 mod ttl_tests;
