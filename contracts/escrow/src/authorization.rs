@@ -75,6 +75,18 @@ pub fn get_caller_role(caller: &Address, contract: &Contract) -> Option<Particip
 /// freelancer (and both are required for approval, but this helper only checks
 /// if one caller *can* approve).
 pub fn require_release_authorization(env: &Env, caller: &Address, contract: &Contract) {
+    try_require_release_authorization(caller, contract)
+        .unwrap_or_else(|err| env.panic_with_error(err));
+}
+
+/// Recoverable authorization check for callers that need to handle a failed
+/// release attempt without entering a panic path. The existing
+/// `require_release_authorization` wrapper preserves the public behavior used
+/// by current entrypoints.
+pub fn try_require_release_authorization(
+    caller: &Address,
+    contract: &Contract,
+) -> Result<(), Error> {
     let role = get_caller_role(caller, contract);
 
     if let Some(role) = role {
@@ -82,29 +94,31 @@ pub fn require_release_authorization(env: &Env, caller: &Address, contract: &Con
         match contract.release_authorization {
             ReleaseAuthorization::ClientOnly => {
                 if role != ParticipantRole::Client {
-                    env.panic_with_error(Error::UnauthorizedRole);
+                    return Err(Error::UnauthorizedRole);
                 }
             }
             ReleaseAuthorization::ArbiterOnly => {
                 if role != ParticipantRole::Arbiter {
-                    env.panic_with_error(Error::UnauthorizedRole);
+                    return Err(Error::UnauthorizedRole);
                 }
             }
             ReleaseAuthorization::ClientAndArbiter => {
                 if role != ParticipantRole::Client && role != ParticipantRole::Arbiter {
-                    env.panic_with_error(Error::UnauthorizedRole);
+                    return Err(Error::UnauthorizedRole);
                 }
             }
             ReleaseAuthorization::MultiSig => {
                 if role != ParticipantRole::Client && role != ParticipantRole::Freelancer {
-                    env.panic_with_error(Error::UnauthorizedRole);
+                    return Err(Error::UnauthorizedRole);
                 }
             }
         }
     } else {
         // Not a participant
-        env.panic_with_error(Error::UnauthorizedRole);
+        return Err(Error::UnauthorizedRole);
     }
+
+    Ok(())
 }
 
 /// Checks if a caller is a valid participant in a contract.
@@ -298,6 +312,27 @@ mod tests {
 
         // Should not panic
         require_release_authorization(&env, &client, &contract);
+    }
+
+    #[test]
+    fn test_try_release_authorization_is_deterministic_for_non_participant() {
+        let env = Env::default();
+        let client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let other = Address::generate(&env);
+        let contract = make_test_contract(
+            &env,
+            &client,
+            &freelancer,
+            None,
+            ReleaseAuthorization::ClientOnly,
+        );
+
+        assert_eq!(
+            try_require_release_authorization(&other, &contract),
+            Err(Error::UnauthorizedRole)
+        );
+        assert!(try_require_release_authorization(&client, &contract).is_ok());
     }
 
     #[test]
