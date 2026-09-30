@@ -2,8 +2,9 @@ use crate::types::{
     ReleaseAuthorization, SimulateCreateContractOutcome, SimulatedDeposit, SimulatedRefund,
     SimulatedRelease,
 };
+use crate::utils::now_seconds;
 use crate::{
-    amount_validation, approvals, ttl, Contract, ContractStatus, DataKey, Error, Escrow,
+    amount_validation, approvals, refund, ttl, Contract, ContractStatus, DataKey, Error, Escrow,
     EscrowArgs, EscrowClient, EscrowError, Milestone, MAX_MILESTONES,
 };
 use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
@@ -350,16 +351,10 @@ impl Escrow {
             return err(Error::ContractPaused as u32);
         }
 
-        if milestone_indices.is_empty() {
-            return err(EscrowError::EmptyRefundRequest as u32);
-        }
-
-        for i in 0..milestone_indices.len() {
-            for j in (i + 1)..milestone_indices.len() {
-                if milestone_indices.get(i).unwrap() == milestone_indices.get(j).unwrap() {
-                    return err(EscrowError::DuplicateMilestoneInRefund as u32);
-                }
-            }
+        // V1: the request-shape boundary defined in `crate::refund`, shared with
+        // `refund_unreleased_milestones` so both paths report the same rejection.
+        if let Err(error) = refund::validate_request(&milestone_indices) {
+            return err(error as u32);
         }
 
         let contract: Contract = match env
@@ -375,11 +370,9 @@ impl Escrow {
             return err(Error::AlreadyFinalized as u32);
         }
 
-        if contract.status != ContractStatus::Created
-            && contract.status != ContractStatus::Funded
-            && contract.status != ContractStatus::Disputed
-        {
-            return err(Error::InvalidState as u32);
+        // V2: the lifecycle boundary defined in `crate::refund`.
+        if let Err(error) = refund::validate_status(&contract) {
+            return err(error as u32);
         }
 
         let key = (
@@ -391,38 +384,20 @@ impl Escrow {
             None => return err(EscrowError::ContractNotFound as u32),
         };
 
-        let mut total_refund_amount: i128 = 0;
+        // V3 + V4/V5: the same milestone, total and balance boundaries the
+        // mutating entrypoint enforces. Reusing them keeps the projection and the
+        // real call in lockstep: an overflow is reported as `PotentialOverflow`
+        // instead of being silently folded into a successful-looking total, and a
+        // released milestone reports `MilestoneAlreadyReleased` rather than the
+        // inconsistent `AlreadyRefunded`.
+        let total_refund_amount =
+            match refund::validate_milestones(&milestones, &milestone_indices, now_seconds(&env)) {
+                Ok(total) => total,
+                Err(error) => return err(error as u32),
+            };
 
-        for idx in milestone_indices.iter() {
-            if idx >= milestones.len() {
-                return err(Error::IndexOutOfBounds as u32);
-            }
-
-            let milestone = milestones.get(idx).unwrap();
-
-            if milestone.released {
-                return err(Error::AlreadyRefunded as u32);
-            }
-
-            if milestone.refunded {
-                return err(EscrowError::AlreadyRefunded as u32);
-            }
-
-            if let Some(_deadline) = milestone.deadline {
-                if !Self::is_milestone_overdue(env.clone(), contract_id, idx) {
-                    return err(Error::MilestoneNotOverdue as u32);
-                }
-            }
-
-            total_refund_amount = total_refund_amount
-                .checked_add(milestone.amount)
-                .unwrap_or(0);
-        }
-
-        let available_balance =
-            contract.funded_amount - contract.released_amount - contract.refunded_amount;
-        if available_balance < total_refund_amount {
-            return err(EscrowError::InsufficientFunds as u32);
+        if let Err(error) = refund::ensure_available_balance(&contract, total_refund_amount) {
+            return err(error as u32);
         }
 
         let projected_refunded_amount = contract

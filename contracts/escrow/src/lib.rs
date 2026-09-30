@@ -82,7 +82,7 @@ mod migration;
 mod milestone_transitions;
 mod milestones;
 pub mod milestones_consts;
-mod refund_impl;
+mod refund;
 mod release;
 mod reputation;
 mod rollback;
@@ -1268,6 +1268,10 @@ impl Escrow {
 
     // Refunds unreleased milestones back to the client.
     //
+    // Every boundary this entrypoint enforces is defined once in
+    // [`crate::refund`] and shared with `simulate_refund`, so a dry run can
+    // never disagree with the real call.
+    //
     // # Arguments
     // * `env` - The contract environment
     // * `contract_id` - The contract ID
@@ -1280,10 +1284,14 @@ impl Escrow {
     // * `ContractNotFound` - If contract doesn't exist
     // * `EmptyRefundRequest` - If milestone_indices is empty
     // * `DuplicateMilestoneInRefund` - If the same milestone appears multiple times
-    // * `IndexOutOfBounds` - If any milestone index is out of bounds
-    // * `AlreadyReleased` - If any milestone was already released
+    // * `IndexOutOfBounds` - If any milestone index is out of bounds, or the
+    //   request carries more indices than `refund::MAX_REFUND_REQUEST_LEN`
+    // * `MilestoneAlreadyReleased` - If any milestone was already released
     // * `AlreadyRefunded` - If any milestone was already refunded
+    // * `MilestoneNotOverdue` - If a milestone with a deadline is not yet overdue
     // * `InsufficientFunds` - If contract doesn't have enough balance to refund
+    // * `PotentialOverflow` - If the schedule total or the contract accounting
+    //   cannot be expressed without overflow
     // * `AlreadyFinalized` - If a finalization record already exists for this contract
     // * `InvalidState` - If contract status is not Created, Funded, or Disputed
     pub fn refund_unreleased_milestones(
@@ -1292,76 +1300,37 @@ impl Escrow {
         milestone_indices: Vec<u32>,
     ) -> i128 {
         Self::require_not_paused(&env);
-        // Validate non-empty request
-        if milestone_indices.is_empty() {
-            env.panic_with_error(EscrowError::EmptyRefundRequest);
-        }
 
-        // Check for duplicates
-        for i in 0..milestone_indices.len() {
-            for j in (i + 1)..milestone_indices.len() {
-                if milestone_indices.get(i).unwrap() == milestone_indices.get(j).unwrap() {
-                    env.panic_with_error(EscrowError::DuplicateMilestoneInRefund);
-                }
-            }
-        }
+        // V1: request shape — non-empty, within the protocol maximum, and free of
+        // duplicates. Runs before any storage access so a malformed request cannot
+        // force state reads or unbounded duplicate scanning.
+        refund::validate_request(&milestone_indices)
+            .unwrap_or_else(|error| env.panic_with_error(error));
 
         let mut contract: Contract = Self::require_active_contract(&env, contract_id);
         let was_disputed = contract.status == ContractStatus::Disputed;
 
-        // Only allow refunds while the contract is still in an active,
-        // unreleased state. Cancelled, Completed, and Refunded contracts
-        // must not be refundable again.
-        if contract.status != ContractStatus::Created
-            && contract.status != ContractStatus::Funded
-            && contract.status != ContractStatus::Disputed
-        {
-            env.panic_with_error(EscrowError::InvalidState);
-        }
+        // V2: only contracts that are still active and unreleased may refund.
+        // Cancelled, Completed, and Refunded contracts are terminal here.
+        refund::validate_status(&contract).unwrap_or_else(|error| env.panic_with_error(error));
 
         contract.client.require_auth();
 
         let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
 
-        let mut total_refund_amount: i128 = 0;
+        // V3: every requested index is in bounds, unreleased, unrefunded, and past
+        // its deadline when one is set. The total is summed with checked
+        // arithmetic, so an overflowing schedule reports `PotentialOverflow`
+        // instead of aborting with an untranslatable arithmetic fault.
+        let total_refund_amount =
+            refund::validate_milestones(&milestones, &milestone_indices, now_seconds(&env))
+                .unwrap_or_else(|error| env.panic_with_error(error));
 
-        // Validate all milestones first
-        for idx in milestone_indices.iter() {
-            if idx >= milestones.len() {
-                env.panic_with_error(Error::IndexOutOfBounds);
-            }
-
-            let milestone = milestones.get(idx).unwrap();
-
-            // SECURITY: Check if milestone is already released
-            if milestone.released {
-                env.panic_with_error(Error::MilestoneAlreadyReleased);
-            }
-
-            // SECURITY: Check if milestone is already refunded
-            if milestone.refunded {
-                env.panic_with_error(EscrowError::AlreadyRefunded);
-            }
-
-            // SECURITY: Check timeout refund conditions - milestone must be overdue if deadline is set
-            if milestone.deadline.is_some() {
-                // Milestone has a deadline - check if it's overdue
-                if !Self::is_milestone_overdue(env.clone(), contract_id, idx) {
-                    // Deadline set but milestone not yet overdue
-                    env.panic_with_error(Error::MilestoneNotOverdue);
-                }
-            }
-            // If no deadline (None), allow refund anytime (backward compatibility)
-
-            total_refund_amount += milestone.amount;
-        }
-
-        // Check if there's enough balance
-        let available_balance =
-            contract.funded_amount - contract.released_amount - contract.refunded_amount;
-        if available_balance < total_refund_amount {
-            env.panic_with_error(EscrowError::InsufficientFunds);
-        }
+        // V4/V5: the contract must still hold the refunded amount in unreleased,
+        // unrefunded balance. Checked, so broken accounting is reported as
+        // `PotentialOverflow` rather than a raw subtraction fault.
+        refund::ensure_available_balance(&contract, total_refund_amount)
+            .unwrap_or_else(|error| env.panic_with_error(error));
 
         let token = Self::read_settlement_token(&env)
             .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
