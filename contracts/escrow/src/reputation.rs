@@ -227,7 +227,7 @@ pub(crate) fn get_reputations_page(
     start: u32,
     limit: u32,
 ) -> Vec<types::ReputationEntry> {
-    let limit = limit.min(PAGE_CEILING);
+    let limit = crate::constants::normalize_page_limit(limit);
     if limit == 0 {
         return Vec::new(env);
     }

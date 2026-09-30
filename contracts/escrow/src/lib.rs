@@ -2397,7 +2397,7 @@ impl Escrow {
     /// or limit is 0. Each returned element includes the account address and the
     /// stored reputation snapshot.
     pub fn get_reputations_page(env: Env, start: u32, limit: u32) -> Vec<types::ReputationEntry> {
-        let limit = limit.min(PAGE_CEILING);
+        let limit = crate::constants::normalize_page_limit(limit);
         if limit == 0 {
             return Vec::new(&env);
         }
