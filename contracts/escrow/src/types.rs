@@ -127,6 +127,12 @@ pub enum DataKey {
     Emergency,
     // Contract storage
     Contract(u32),
+    /// Per-record schema version written alongside each `Contract` entry.
+    ///
+    /// Absent means the record was written before versioning existed (schema v1).
+    /// When present, the value must equal [`crate::migration::CONTRACT_STORAGE_SCHEMA_VERSION`]
+    /// for the record to be considered current.
+    ContractSchemaVersion(u32),
     NextContractId,
     MilestoneReleased(u32, u32),
     MilestoneApprovals(u32, u32),

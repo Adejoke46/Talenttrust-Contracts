@@ -120,7 +120,7 @@ pub use dispute::final_status_after_resolution;
 pub use dispute::resolution_payouts;
 pub use dispute::DisputeInfo;
 pub use events::{EventInput, MAX_EVENT_BATCH_SIZE};
-pub use migration::PendingClientMigration;
+pub use migration::{ContractV1, PendingClientMigration, CONTRACT_STORAGE_SCHEMA_VERSION};
 pub use milestones_consts::PROTOCOL_FEE_BPS_DENOMINATOR;
 pub use token_scale::{normalized_amount, scale_multiplier, MAX_TOKEN_DECIMALS};
 pub use ttl::{
@@ -345,6 +345,29 @@ impl Escrow {
     pub fn accept_client_migration(env: Env, contract_id: u32, new_client: Address) -> bool {
         Self::require_not_paused(&env);
         Self::accept_client_migration_impl(&env, contract_id, new_client)
+    }
+
+    /// Cancel a live pending client migration.
+    ///
+    /// The current client must authorize the call. A cancel on a terminal
+    /// contract status (`Completed`, `Cancelled`, `Refunded`, `Disputed`) is
+    /// rejected with `InvalidStatusTransition`. Cancelling a non-existent or
+    /// already-expired proposal is rejected with `InvalidState`.
+    ///
+    /// # Errors
+    /// * `ContractNotFound` — `contract_id` is 0 or not found.
+    /// * `ContractPaused` / `EmergencyActive` — system is halted.
+    /// * `UnauthorizedRole` — caller is not the current client.
+    /// * `AlreadyFinalized` — contract is finalized.
+    /// * `InvalidStatusTransition` — contract is in a terminal status.
+    /// * `InvalidState` — no live pending migration exists.
+    pub fn cancel_client_migration(
+        env: Env,
+        contract_id: u32,
+        current_client: Address,
+    ) -> bool {
+        Self::require_not_paused(&env);
+        Self::cancel_client_migration_impl(&env, contract_id, current_client)
     }
 
     pub fn has_pending_client_migration(env: Env, contract_id: u32) -> bool {
