@@ -24,8 +24,8 @@ fn test_same_logical_key_produces_identical_storage_key() {
     let symbol2 = milestone_symbol(&env);
     assert_eq!(symbol1, symbol2);
 
-    let app_key1 = milestone_approval_key(10, 2);
-    let app_key2 = milestone_approval_key(10, 2);
+    let app_key1 = milestone_approval_key(&env, 10, 2);
+    let app_key2 = milestone_approval_key(&env, 10, 2);
     assert_eq!(app_key1, app_key2);
 }
 

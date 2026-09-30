@@ -1671,7 +1671,7 @@ impl Escrow {
         contract_id: u32,
         milestone_index: u32,
     ) -> Option<MilestoneApprovals> {
-        let approval_key = keys::milestone_approval_key(contract_id, milestone_index);
+        let approval_key = keys::milestone_approval_key(&env, contract_id, milestone_index);
         let approvals = env.storage().temporary().get(&approval_key);
         if approvals.is_some() {
             env.storage().temporary().extend_ttl(

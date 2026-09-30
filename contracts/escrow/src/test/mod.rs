@@ -47,6 +47,7 @@ mod test_pause_scope;
 mod event_assertions;
 mod lifecycle_invariants;
 mod governance_proposal;
+mod keys_validation;
 mod simulate_create_contract;
 mod simulate_deposit;
 mod simulate_release;
