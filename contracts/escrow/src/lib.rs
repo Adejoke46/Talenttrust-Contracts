@@ -809,19 +809,23 @@ impl Escrow {
     // protocol-fee, and governance operations. All escrow lifecycle operations
     // (create, deposit, release, refund, cancel) call `require_initialized`
     // so that these safety rails are always bound before money can move.
+    //
+    // Double-initialization is rejected via the canonical `require_not_initialized`
+    // guard from `storage`, which provides a single consistent check-point across
+    // all code paths that could reach initialization logic.
     pub fn initialize(env: Env, admin: Address) -> bool {
-        if env
-            .storage()
-            .persistent()
-            .get::<_, bool>(&DataKey::Initialized)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(Error::AlreadyInitialized);
-        }
+        // Single canonical idempotency guard — panics with AlreadyInitialized if
+        // the Initialized flag is already set. This replaces the previous inline
+        // read/branch so that all initialization code paths share the same guard.
+        crate::storage::require_not_initialized(&env);
 
         admin.require_auth();
-        env.storage().persistent().set(&DataKey::Initialized, &true);
-        env.storage().persistent().set(&DataKey::Admin, &admin);
+
+        // Persist the initialized flag and admin address atomically via the
+        // canonical helper. This ensures both writes happen together and the
+        // same code path is exercised by all callers.
+        crate::storage::save_initialized(&env, &admin);
+
         env.storage()
             .persistent()
             .set(&DataKey::NextContractId, &1u32);

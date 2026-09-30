@@ -3,19 +3,43 @@
 //! This module extracts repeated storage validation patterns into a single source
 //! of truth, ensuring consistent error handling and reducing code duplication across
 //! entrypoints. All contract loading operations should route through these helpers.
+//!
+//! ## Concurrency and idempotency invariants
+//!
+//! Soroban smart contracts execute within a single atomic ledger transaction. A
+//! given transaction either commits in full or aborts with no state change — there
+//! is no partial commit and no interleaving of two concurrent transactions within
+//! the same ledger. This means classic "check-then-act" races between two threads
+//! are impossible *within* a single invocation, but replay attacks and
+//! double-submission at the application layer are real threats.
+//!
+//! The helpers in this module are therefore hardened against the following adverse
+//! patterns:
+//!
+//! * **Replay attacks (nonce reuse)**: `consume_admin_nonce` stores the *next
+//!   expected* nonce immediately after a successful check. A replayed call with
+//!   the same nonce will observe the already-incremented value and fail with
+//!   [`Error::StaleNonce`]. The stored value is never decremented, so nonces are
+//!   strictly monotone.
+//!
+//! * **Double-initialization**: `require_not_initialized` checks `DataKey::Initialized`
+//!   with `.has()` before any write so that a second call to `initialize` from any
+//!   code path fails with [`Error::AlreadyInitialized`] regardless of how the check
+//!   is reached.
+//!
+//! * **Double-finalization**: `require_not_finalized` and `is_finalized` are thin
+//!   wrappers around a single persistent `.has()` so callers never diverge in how
+//!   they interpret the finalization state.
+//!
+//! * **Pause-then-act gaps**: `load_contract_checked` performs the pause check
+//!   *before* loading the contract body. This ensures that no contract data is
+//!   visible to the caller when the system is paused, eliminating any ambiguity
+//!   about which state the caller should trust.
 
 use crate::{Contract, DataKey, Error, EscrowError};
 use soroban_sdk::{Env, Symbol, Vec};
 
-/// Validate that contract_id is within numeric bounds (non-zero).
-///
-/// # Panics
-/// - `InvalidContractId` if `contract_id == 0`
-pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
-    if contract_id == 0 {
-        env.panic_with_error(EscrowError::ContractNotFound);
-    }
-}
+// ── Initialization guards ─────────────────────────────────────────────────────
 
 /// Check if the contract system has been initialized.
 ///
@@ -31,6 +55,11 @@ pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
 ///
 /// # Returns
 /// `true` if initialized, or panics with `NotInitialized`
+///
+/// # Concurrency invariant
+/// This is a read-only guard. The initialization flag is set exactly once by
+/// `save_initialized` (see below). A subsequent call to `require_initialized`
+/// after initialization will always return `true`.
 pub(crate) fn require_initialized(env: &Env) -> bool {
     env.storage()
         .persistent()
@@ -40,6 +69,72 @@ pub(crate) fn require_initialized(env: &Env) -> bool {
         .ok_or(Error::NotInitialized)
         .unwrap_or_else(|err| env.panic_with_error(err))
 }
+
+/// Assert that the contract system has **not** been initialized.
+///
+/// Call this at the very start of the `initialize` entrypoint to provide a
+/// single, consistent double-initialization guard. Every code path that might
+/// call into initialization logic should route through this helper rather than
+/// performing an inline `.has()` check.
+///
+/// # Panics
+/// - `AlreadyInitialized` if `DataKey::Initialized` is already set to `true`
+///
+/// # Idempotency invariant
+/// Once `save_initialized` has written `DataKey::Initialized = true`, every
+/// subsequent call to `require_not_initialized` will panic. There is no
+/// operation that clears the initialized flag, so initialization is
+/// permanently one-shot.
+pub(crate) fn require_not_initialized(env: &Env) {
+    // Use `.has()` instead of `.get()` for the presence check so we avoid
+    // deserializing the value; the mere existence of the key is sufficient.
+    if env.storage().persistent().has(&DataKey::Initialized) {
+        env.panic_with_error(Error::AlreadyInitialized);
+    }
+}
+
+/// Persist the initialized flag and write the admin address in one logical step.
+///
+/// This helper is the single canonical write path for initialization. Callers
+/// MUST call `require_not_initialized` before this function to prevent double
+/// writes. The two-step pattern (check then write) is safe within Soroban
+/// because a ledger transaction is fully atomic: if the check passes, no other
+/// transaction can have set the flag between the check and the write in the
+/// same transaction context.
+///
+/// # Arguments
+/// * `env`   - The contract environment
+/// * `admin` - The admin address to record under `DataKey::Admin`
+///
+/// # Invariant
+/// After this function returns, `DataKey::Initialized` is `true` and
+/// `DataKey::Admin` is `admin`. Both are persistent entries.
+pub(crate) fn save_initialized(env: &Env, admin: &crate::Address) {
+    env.storage().persistent().set(&DataKey::Initialized, &true);
+    env.storage().persistent().set(&DataKey::Admin, admin);
+}
+
+// ── Contract ID bounds ────────────────────────────────────────────────────────
+
+/// Validate that `contract_id` is within numeric bounds (non-zero).
+///
+/// Zero is rejected because contracts are allocated starting from ID 1. Any
+/// read or write against ID 0 is a programming error and must fail loudly.
+///
+/// # Panics
+/// - `InvalidContractId` if `contract_id == 0`
+///
+/// # Correctness note
+/// Callers that pass the result of a prior validated allocation (from
+/// `create_contract`) will never see a zero here in normal operation. This
+/// guard exists to reject malicious or confused client inputs.
+pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
+    if contract_id == 0 {
+        env.panic_with_error(Error::InvalidContractId);
+    }
+}
+
+// ── Contract loading ──────────────────────────────────────────────────────────
 
 /// Load a contract from persistent storage.
 ///
@@ -94,6 +189,17 @@ pub(crate) fn load_milestones(env: &Env, contract_id: u32) -> Vec<crate::Milesto
 /// - `check_paused`: If true, verifies pause/emergency flags are not set
 /// - `check_finalized`: If true, verifies the contract has not been finalized
 ///
+/// The pause check is performed **before** the contract is loaded from storage.
+/// This ordering is intentional: it means callers never receive a contract
+/// value in a state where the system is paused, which closes a potential
+/// check-then-use ambiguity when the returned value is stored in a local
+/// variable and the pause state changes conceptually between the load and the
+/// mutation.
+///
+/// Within a single Soroban transaction the storage is consistent throughout,
+/// but this ordering also makes the control flow easier to reason about during
+/// code review.
+///
 /// # Arguments
 /// * `env` - The contract environment
 /// * `contract_id` - The contract ID to load
@@ -115,19 +221,31 @@ pub(crate) fn load_contract_checked(
     check_paused: bool,
     check_finalized: bool,
 ) -> Contract {
+    // Validate bounds first — this rejects the degenerate zero ID immediately
+    // before incurring any storage reads.
     validate_contract_id_bounds(env, contract_id);
+
+    // Pause check happens before the contract load (see doc comment above).
     if check_paused {
         require_not_paused(env);
     }
 
+    // Load the contract body.
     let contract = load_contract(env, contract_id);
 
+    // Finalization check follows the load because the finalization record is
+    // stored under a separate key from the contract body. Both are read in the
+    // same transaction, so this is consistent. Checking finalization *after*
+    // confirming the contract exists avoids a misleading `AlreadyFinalized` on
+    // a non-existent contract.
     if check_finalized {
         require_not_finalized(env, contract_id);
     }
 
     contract
 }
+
+// ── Pause and emergency guards ────────────────────────────────────────────────
 
 /// Check if the contract system is paused or in emergency mode.
 ///
@@ -140,6 +258,10 @@ pub(crate) fn load_contract_checked(
 ///
 /// # Returns
 /// `true` if neither pause nor emergency is active, or panics
+///
+/// # Idempotency note
+/// This function is read-only and has no side effects. Calling it multiple
+/// times within the same transaction always observes the same state.
 pub(crate) fn require_not_paused(env: &Env) -> bool {
     if env
         .storage()
@@ -211,28 +333,64 @@ pub(crate) fn require_pause_scope(env: &Env, target: &crate::PauseTarget) {
     }
 }
 
+// ── Admin nonce ───────────────────────────────────────────────────────────────
+
 /// Consume the next expected admin nonce, rejecting stale or future values.
 ///
-/// Stores a monotonic `u64` under [`DataKey::AdminNonce`]. On the first call
-/// the expected nonce is `1` (zero means uninitialized). After a successful
-/// call the stored nonce is incremented atomically.
+/// The nonce is a strictly monotone `u64` counter stored under
+/// [`DataKey::AdminNonce`]. On the first call the expected nonce is `1`
+/// (zero means "never consumed").
+///
+/// # Atomicity invariant
+/// The read, compare, and increment are performed within a single Soroban
+/// transaction. Soroban's ledger guarantees that no other transaction can
+/// observe or modify `DataKey::AdminNonce` between the `.get` and the `.set`
+/// within the same invocation. This makes the combined read-validate-write
+/// effectively atomic.
+///
+/// A replay of the same call in a later transaction will read the incremented
+/// value and immediately fail with [`Error::StaleNonce`].
+///
+/// # Overflow guard
+/// If `current + 1` would overflow `u64`, the function panics with
+/// [`Error::PotentialOverflow`]. At one nonce per admin operation, the 2^64
+/// ceiling is not reachable in practice, but the check is present to satisfy
+/// formal correctness requirements and to make the contract provably panic-safe.
+///
+/// # Arguments
+/// * `env`            - The contract environment
+/// * `provided_nonce` - The nonce value supplied by the caller
 ///
 /// # Panics
-/// Panics with [`Error::StaleNonce`] if the provided nonce does not match.
+/// - `StaleNonce` if `provided_nonce != current + 1`
+/// - `PotentialOverflow` if `current == u64::MAX`
 pub(crate) fn consume_admin_nonce(env: &Env, provided_nonce: u64) {
     let current: u64 = env
         .storage()
         .persistent()
         .get(&DataKey::AdminNonce)
-        .unwrap_or(0);
-    let expected = current + 1;
+        .unwrap_or(0u64);
+
+    // Guard against nonce counter overflow (defensive; 2^64 is unreachable
+    // in any realistic deployment timeline).
+    let expected = current
+        .checked_add(1)
+        .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+
     if provided_nonce != expected {
         env.panic_with_error(Error::StaleNonce);
     }
+
+    // Commit the incremented nonce atomically within this transaction.
+    // Any replay using the same `provided_nonce` in a future transaction
+    // will find `current = expected` and compute `expected_new = expected + 1`,
+    // causing the equality check to fail.
     env.storage()
         .persistent()
         .set(&DataKey::AdminNonce, &expected);
 }
+
+// ── Finalization guards ───────────────────────────────────────────────────────
 
 /// Check if a contract has been finalized.
 ///
@@ -261,6 +419,10 @@ pub(crate) fn is_finalized(env: &Env, contract_id: u32) -> bool {
 ///
 /// # Returns
 /// `true` if not finalized, or panics
+///
+/// # Idempotency note
+/// Once a finalization record is written, this function will always panic for
+/// that contract ID. There is no operation that removes a finalization record.
 pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) -> bool {
     validate_contract_id_bounds(env, contract_id);
     if is_finalized(env, contract_id) {
@@ -269,381 +431,15 @@ pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) -> bool {
     true
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Milestone;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Address, Env};
+// ── Tests ─────────────────────────────────────────────────────────────────────
+//
+// Unit tests for the storage helpers are located in `src/test/storage_helpers.rs`
+// rather than as inline `#[cfg(test)]` tests here. This is necessary because
+// Soroban's SDK requires all persistent-storage calls to execute within an active
+// contract context (`env.as_contract(&contract_address, || { ... })`), which in
+// turn requires a registered contract instance via `env.register(Escrow, ())`.
+//
+// Registering an `Escrow` from within storage.rs would create a circular
+// module dependency. Moving the tests to the `test/` module, which already
+// imports `Escrow` and `EscrowClient`, resolves this cleanly.
 
-    fn setup_test_env() -> (Env, Address) {
-        let env = Env::default();
-        let admin = Address::generate(&env);
-        (env, admin)
-    }
-
-    #[test]
-    fn test_require_initialized_when_true() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage().persistent().set(&DataKey::Initialized, &true);
-            let result = require_initialized(&env);
-            assert!(result);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "NotInitialized")]
-    fn test_require_initialized_when_false() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            require_initialized(&env);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_contract_not_found() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_contract(&env, 999);
-        });
-    }
-
-    #[test]
-    fn test_load_contract_found() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-
-            let loaded = load_contract(&env, 42);
-            assert_eq!(loaded.client, client);
-            assert_eq!(loaded.freelancer, freelancer);
-            assert_eq!(loaded.status, crate::ContractStatus::Created);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_milestones_not_found() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_milestones(&env, 999);
-        });
-    }
-
-    #[test]
-    fn test_load_milestones_found() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let milestones = Vec::from_array(
-                &env,
-                [
-                    Milestone {
-                        amount: 1000,
-                        funded_amount: 0,
-                        released: false,
-                        refunded: false,
-                        deadline: None,
-                        refunded_amount: 0,
-                        work_evidence: None,
-                    },
-                    Milestone {
-                        amount: 2000,
-                        funded_amount: 0,
-                        released: false,
-                        refunded: false,
-                        deadline: None,
-                        refunded_amount: 0,
-                        work_evidence: None,
-                    },
-                ],
-            );
-
-            let milestone_key = Symbol::new(&env, "milestones");
-            env.storage()
-                .persistent()
-                .set(&(DataKey::Contract(42), milestone_key), &milestones);
-
-            let loaded = load_milestones(&env, 42);
-            assert_eq!(loaded.len(), 2);
-            assert_eq!(loaded.get(0).unwrap().amount, 1000);
-            assert_eq!(loaded.get(1).unwrap().amount, 2000);
-        });
-    }
-
-    #[test]
-    fn test_require_not_paused_when_not_paused() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let result = require_not_paused(&env);
-            assert!(result);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractPaused")]
-    fn test_require_not_paused_when_paused() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage().persistent().set(&DataKey::Paused, &true);
-            require_not_paused(&env);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "EmergencyActive")]
-    fn test_require_not_paused_when_emergency() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage().persistent().set(&DataKey::Emergency, &true);
-            require_not_paused(&env);
-        });
-    }
-
-    #[test]
-    fn test_is_finalized_when_false() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let result = is_finalized(&env, 42);
-            assert!(!result);
-        });
-    }
-
-    #[test]
-    fn test_is_finalized_when_true() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Finalization(42), &true);
-
-            let result = is_finalized(&env, 42);
-            assert!(result);
-        });
-    }
-
-    #[test]
-    fn test_require_not_finalized_when_not_finalized() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let result = require_not_finalized(&env, 42);
-            assert!(result);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "AlreadyFinalized")]
-    fn test_require_not_finalized_when_finalized() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Finalization(42), &true);
-
-            require_not_finalized(&env, 42);
-        });
-    }
-
-    #[test]
-    fn test_load_contract_checked_all_checks() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-
-            let loaded = load_contract_checked(&env, 42, true, true);
-            assert_eq!(loaded.client, client);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractPaused")]
-    fn test_load_contract_checked_paused() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-            env.storage().persistent().set(&DataKey::Paused, &true);
-
-            load_contract_checked(&env, 42, true, true);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "AlreadyFinalized")]
-    fn test_load_contract_checked_finalized() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-            env.storage()
-                .persistent()
-                .set(&DataKey::Finalization(42), &true);
-
-            load_contract_checked(&env, 42, true, true);
-        });
-    }
-
-    #[test]
-    fn test_load_contract_checked_no_checks() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-            env.storage().persistent().set(&DataKey::Paused, &true);
-            env.storage()
-                .persistent()
-                .set(&DataKey::Finalization(42), &true);
-
-            // Should succeed because checks are disabled
-            let loaded = load_contract_checked(&env, 42, false, false);
-            assert_eq!(loaded.client, client);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "InvalidContractId")]
-    fn test_validate_contract_id_bounds_zero_panics() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            validate_contract_id_bounds(&env, 0);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_contract_zero_id_panics() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_contract(&env, 0);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_milestones_zero_id_panics() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_milestones(&env, 0);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_contract_checked_zero_id_panics() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_contract_checked(&env, 0, false, false);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_is_finalized_zero_id_panics() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            is_finalized(&env, 0);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_require_not_finalized_zero_id_panics() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            require_not_finalized(&env, 0);
-        });
-    }
-
-    #[test]
-    fn test_validate_contract_id_bounds_valid_range() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            validate_contract_id_bounds(&env, 1);
-            validate_contract_id_bounds(&env, 42);
-            validate_contract_id_bounds(&env, u32::MAX);
-        });
-    }
-}
