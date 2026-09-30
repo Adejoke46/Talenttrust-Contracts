@@ -24,6 +24,7 @@ mod deposit;
 // mod dispute;
 // mod disputes_page;
 mod emergency_controls;
+mod finalize_concurrency;
 mod fuzz_milestone_deadline;
 mod input_sanitization_amounts;
 mod input_sanitization_identities;

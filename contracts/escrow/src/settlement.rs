@@ -18,6 +18,13 @@
 //! Every `write_*` followed by the corresponding `read_*` returns the
 //! same value.  The `test_settlement_storage` module in `test/` verifies
 //! this invariant plus absent-key behaviour.
+//!
+//! # Write-once guarantee
+//!
+//! [`write_finalization`] refuses to overwrite an existing close record and
+//! panics with [`Error::AlreadyFinalized`] instead, so duplicate or racing
+//! finalization attempts cannot silently discard the original finalizer,
+//! timestamp or summary snapshot.
 
 use crate::{finalize::FinalizationRecord, DataKey, Error};
 use soroban_sdk::{Address, Env};
@@ -296,8 +303,17 @@ pub fn is_finalized(env: &Env, contract_id: u32) -> bool {
         .has(&finalization_key(contract_id))
 }
 
-/// Persist a finalization record.  Callers must guard against double-
-/// finalization ([`is_finalized`]) before calling this helper.
+/// Persist a finalization record.
+///
+/// The write is **write-once**: if a record already exists for `contract_id`
+/// this panics with [`Error::AlreadyFinalized`] instead of overwriting it. The
+/// check lives in the storage layer so the immutability guarantee does not
+/// depend on every future caller remembering to guard first; callers are still
+/// expected to check [`is_finalized`] up front so that a duplicate call is
+/// rejected without any state change.
+///
+/// TTL policy is *not* applied here — the caller owns it (see
+/// `crate::ttl::extend_finalization_ttl`).
 ///
 /// # Arguments
 ///
@@ -305,13 +321,17 @@ pub fn is_finalized(env: &Env, contract_id: u32) -> bool {
 /// * `contract_id` – The numeric contract identifier.
 /// * `record`      – The [`FinalizationRecord`] to persist.
 ///
+/// # Errors
+///
+/// Panics with [`Error::AlreadyFinalized`] when a record already exists.
+///
 /// # Example
 ///
 /// ```no_run
 /// use soroban_sdk::{testutils::Address as _, Address, Env};
 /// use escrow::{
 ///     Escrow, ContractStatus, ContractSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
-///     settlement::{read_finalization, write_finalization},
+///     settlement::{write_finalization, read_finalization},
 /// };
 /// use escrow::finalize::FinalizationRecord;
 ///
@@ -343,9 +363,13 @@ pub fn is_finalized(env: &Env, contract_id: u32) -> bool {
 ///     let loaded = read_finalization(&env, 5).unwrap();
 ///     assert_eq!(loaded.finalizer, finalizer);
 ///     assert_eq!(loaded.timestamp, 1_000_000);
+///
+///     // A second write is rejected: the close record is immutable.
+///     write_finalization(&env, 5, &record); // panics: AlreadyFinalized
 /// });
 /// ```
 pub fn write_finalization(env: &Env, contract_id: u32, record: &FinalizationRecord) {
+    require_not_finalized(env, contract_id);
     env.storage()
         .persistent()
         .set(&finalization_key(contract_id), record);

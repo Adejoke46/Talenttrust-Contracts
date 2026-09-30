@@ -38,8 +38,13 @@
 //! Storage ownership: this module owns TTL policy and helper access patterns,
 //! not business records. It extends caller-provided keys, with first-class
 //! helpers for `DataKey::Contract(contract_id)`, the paired milestone vector
-//! key `(DataKey::Contract(contract_id), "milestones")`, `NextContractId`,
-//! participant index keys, pending approvals, and pending migrations.
+//! key `(DataKey::Contract(contract_id), "milestones")`, `Finalization(contract_id)`,
+//! `NextContractId`, participant index keys, pending approvals, and pending migrations.
+//!
+//! **Guard durability**: `DataKey::Finalization(contract_id)` is the single
+//! source of truth for "this contract is closed". `extend_contract_ttl` keeps
+//! it alive alongside the contract entry so the guard can never expire before
+//! the data it protects.
 //!
 use crate::{types::Error, DataKey, Milestone};
 use soroban_sdk::{Env, IntoVal, Symbol, TryFromVal, Val, Vec};
@@ -188,13 +193,42 @@ pub fn extend_next_contract_id_ttl(env: &Env) {
     }
 }
 
+/// Extend TTL of the immutable finalization record for `contract_id`.
+///
+/// No-op when the contract has not been finalized (the key is absent): the host
+/// rejects `extend_ttl` on missing entries, so liveness must be checked first.
+///
+/// The record is the *only* thing that marks a contract as finalized, so its
+/// lifetime must never be shorter than the lifetime of the entries it guards.
+/// Every helper that extends `DataKey::Contract(contract_id)` therefore routes
+/// through [`extend_finalization_ttl`]; see [`crate::finalize`] for the
+/// invariants this preserves.
+pub fn extend_finalization_ttl(env: &Env, contract_id: u32) {
+    let key = DataKey::Finalization(contract_id);
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_TTL_LEDGERS,
+        );
+    }
+}
+
 /// Extend TTL of a single contract entry.
+///
+/// Also refreshes the finalization record for the same contract, when one
+/// exists. Without this, a read getter or mutating path could keep the contract
+/// entry alive for another `PERSISTENT_TTL_LEDGERS` while the (shorter lived)
+/// record was evicted — the contract would then look unfinalized to
+/// `is_finalized` yet reject every mutation with `AlreadyFinalized`, and could
+/// be finalized a second time.
 pub fn extend_contract_ttl(env: &Env, contract_id: u32) {
     env.storage().persistent().extend_ttl(
         &DataKey::Contract(contract_id),
         PERSISTENT_BUMP_THRESHOLD,
         PERSISTENT_TTL_LEDGERS,
     );
+    extend_finalization_ttl(env, contract_id);
 }
 
 /// Extend TTL of the milestones vector for a given contract.
