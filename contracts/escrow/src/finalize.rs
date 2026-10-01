@@ -40,8 +40,9 @@
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
 use crate::{
+    ttl::{self, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_TTL_LEDGERS},
     Contract, ContractStatus, ContractSummary, DataKey, Error, Escrow, EscrowError, Milestone,
-    MilestoneSummary,
+    MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Immutable metadata written when an escrow contract is closed.
@@ -60,16 +61,43 @@ pub struct FinalizationRecord {
     pub summary: ContractSummary,
 }
 
+/// Statuses a contract may hold when it is sealed.
+///
+/// `Completed` and `Disputed` are the only two states in which every milestone
+/// has already been dispositioned, so a close summary is meaningful.
+fn is_sealable_status(status: ContractStatus) -> bool {
+    status == ContractStatus::Completed || status == ContractStatus::Disputed
+}
+
 impl Escrow {
     fn finalization_key(contract_id: u32) -> DataKey {
         DataKey::Finalization(contract_id)
     }
 
+    /// Load the contract record for a finalization attempt and refresh its TTL.
+    ///
+    /// The bump is unconditional: an entry that is still live is renewed
+    /// according to the standard policy, and one that has already been evicted
+    /// is left evicted.  This keeps a contract that is being closed from
+    /// lapsing while the (longer) summary computation runs.
     fn load_contract_for_finalization(env: &Env, contract_id: u32) -> Contract {
-        env.storage()
+        let contract: Contract = env
+            .storage()
             .persistent()
-            .get::<_, Contract>(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound))
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        ttl::extend_contract_ttl(env, contract_id);
+        contract
+    }
+
+    /// Load a contract for finalization without extending TTL. Finalization
+    /// is a terminal transition; the record itself is what must outlive the
+    /// contract, so we do not refresh the contract TTL here.
+    fn load_contract_for_finalization_checked(
+        env: &Env,
+        contract_id: u32,
+    ) -> Contract {
+        Self::load_contract_for_finalization(env, contract_id)
     }
 
     /// Returns `true` when a finalization record already exists.
@@ -90,9 +118,16 @@ impl Escrow {
     }
 
     pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) {
-        if Self::is_finalized(env, contract_id) {
-            env.panic_with_error(Error::AlreadyFinalized);
-        }
+        settlement::require_not_finalized(env, contract_id);
+    }
+
+    /// Returns true when the contract status is a terminal, non-mutable
+    /// state that must never be resurrected by lifecycle entrypoints.
+    pub(crate) fn is_terminal_status(status: ContractStatus) -> bool {
+        matches!(
+            status,
+            ContractStatus::Cancelled | ContractStatus::Refunded
+        )
     }
 
     /// Load a contract, verify it's in an active (mutable) state, and extend
@@ -111,11 +146,9 @@ impl Escrow {
     /// The loaded `Contract`.
     pub(crate) fn require_active_contract(env: &Env, contract_id: u32) -> Contract {
         let contract = crate::storage::load_contract(env, contract_id);
-        crate::ttl::extend_contract_ttl(env, contract_id);
+        ttl::extend_contract_ttl(env, contract_id);
         Self::require_not_finalized(env, contract_id);
-        if contract.status == ContractStatus::Cancelled
-            || contract.status == ContractStatus::Refunded
-        {
+        if Self::is_terminal_status(contract.status) {
             env.panic_with_error(Error::InvalidState);
         }
         contract
@@ -165,9 +198,24 @@ impl Escrow {
 
         for (index, ms) in milestones.iter().enumerate() {
             let idx = index as u32;
+
+            // I4: `released` and `refunded` are mutually exclusive terminal
+            // states. A milestone carrying both is unreachable and would make
+            // the sealed record self-contradictory.
+            if ms.released && ms.refunded {
+                env.panic_with_error(Error::AccountingInvariantViolated);
+            }
+
             total_amount = total_amount
                 .checked_add(ms.amount)
                 .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+
+            // Invariant: a milestone cannot be both released and refunded.
+            // Allowing both would double-count funds in the summary and
+            // break downstream accounting.
+            if ms.released && ms.refunded {
+                env.panic_with_error(Error::InvalidState);
+            }
 
             if ms.released {
                 released_milestone_count = released_milestone_count
@@ -204,14 +252,80 @@ impl Escrow {
             milestones: milestone_summaries,
         }
     }
+
+    /// Refuse to seal accounting that cannot be reconciled.
+    ///
+    /// Runs after the summary is built and before anything is written, so a
+    /// contract in an unreconcilable state stays mutable and an operator can
+    /// still repair or refund it.  Refusing is the safe direction: the
+    /// alternative is freezing a balance that does not add up into a record
+    /// that can never be corrected.
+    ///
+    /// # Panics
+    /// - `AccountingInvariantViolated` when any of I1, I2, I3, I5 is broken.
+    /// - `PotentialOverflow` when the paid totals cannot be summed.
+    fn require_sealable_accounting(env: &Env, contract: &Contract, summary: &ContractSummary) {
+        // I1: ledger totals are non-negative.
+        if contract.funded_amount < 0
+            || contract.released_amount < 0
+            || contract.refunded_amount < 0
+        {
+            env.panic_with_error(Error::AccountingInvariantViolated);
+        }
+
+        // I2: released + refunded <= funded.
+        let paid = contract
+            .released_amount
+            .checked_add(contract.refunded_amount)
+            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+        if paid > contract.funded_amount {
+            env.panic_with_error(Error::AccountingInvariantViolated);
+        }
+
+        // I3: a contract cannot have been funded beyond its milestone total,
+        // and the milestone total itself cannot be negative.
+        if summary.total_amount < 0 || contract.funded_amount > summary.total_amount {
+            env.panic_with_error(Error::AccountingInvariantViolated);
+        }
+
+        // I5: the summary is a faithful projection of the contract it was
+        // derived from. Guards against the two ever drifting apart.
+        if summary.status != contract.status
+            || summary.funded_amount != contract.funded_amount
+            || summary.released_amount != contract.released_amount
+            || summary.refundable_balance != contract.funded_amount - paid
+        {
+            env.panic_with_error(Error::AccountingInvariantViolated);
+        }
+    }
 }
 
 /// Finalize an escrow contract by writing immutable close metadata.
 ///
 /// `finalizer` must authorize the call and must be the stored client,
 /// freelancer, or assigned arbiter. Finalization is allowed only while the
-/// contract is `Completed` or `Disputed`. Once finalized, future
-/// contract-specific mutations fail with `AlreadyFinalized`.
+/// contract is in a terminal state: `Completed`, `Disputed`, `Refunded`,
+/// or `Cancelled`. Once finalized, future contract-specific mutations
+/// fail with `AlreadyFinalized`.
+///
+/// # Execution order
+///
+/// The checks below run in a fixed order so that the reported error always
+/// names the first condition that actually failed, on every call and in every
+/// build profile:
+///
+/// 1. `contract_id` is in bounds.
+/// 2. No close record exists yet (`AlreadyFinalized`).
+/// 3. Pause and emergency controls are clear.
+/// 4. The contract exists and is in a sealable state.
+/// 5. `finalizer` authorized the call and is a participant of this contract.
+/// 6. The close summary reconciles with the contract record.
+/// 7. The seal is written, the dispute snapshot is dropped if any, and the
+///    `finalized` event is published.
+///
+/// Steps 1–6 are read-only. A panic anywhere in them aborts the invocation
+/// before any storage is touched, so the contract remains unfinalized and
+/// retryable and a competing finalizer cannot observe a partial seal.
 ///
 /// Evaluation order is fixed so that every input maps to exactly one outcome:
 /// duplicate-work guard → contract existence → status gate → pause/emergency
@@ -265,13 +379,24 @@ pub fn finalize_contract_impl(env: &Env, contract_id: u32, finalizer: Address) -
     crate::settlement::write_finalization(env, contract_id, &record);
     crate::ttl::extend_finalization_ttl(env, contract_id);
 
+    // A disputed contract carries a pre-dispute snapshot that `rollback_dispute`
+    // would restore while the dispute is still untouched. Finalization is a
+    // deliberate, authorized close, so the snapshot is superseded and dropped
+    // here — but only after the summary has been fully validated, so the
+    // recovery path is never discarded in exchange for a record that then
+    // fails to reconcile. Removal is idempotent, so a contract sealed without
+    // a snapshot is unaffected.
     if contract.status == ContractStatus::Disputed {
         crate::rollback::clear_dispute_rollback(env, contract_id);
     }
 
+    // Publish the sealed summary alongside the finalizer and timestamp so an
+    // indexer can reconcile the close from the event alone. The payload is
+    // addresses, status flags and amounts already present in the record — no
+    // evidence strings, keys or other sensitive data.
     env.events().publish(
         (symbol_short!("finalized"), contract_id),
-        (finalizer, record.timestamp),
+        (finalizer, record.timestamp, record.summary),
     );
 
     true

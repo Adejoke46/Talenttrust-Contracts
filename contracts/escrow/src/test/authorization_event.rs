@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Tests for `set_release_authorization` and its `auth_chg` indexed event.
 //!
 //! # Coverage
@@ -31,7 +32,6 @@
 //! 10. `test_auth_chg_rejects_contract_not_found` — unknown `contract_id`
 //!     panics with `ContractNotFound`.
 
-#![cfg(test)]
 
 use soroban_sdk::{
     testutils::{Address as _, Events},

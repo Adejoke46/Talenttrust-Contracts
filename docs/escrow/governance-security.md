@@ -49,6 +49,47 @@ nothing pending and fails with `Error::InvalidState`.
 All mutating admin controls require the stored admin's (or, for `accept_admin`,
 the proposed admin's) Soroban authorization.
 
+### Concurrent clients and retries
+
+Transactions execute atomically in serialized order, but a signed request can
+arrive after the pending proposal has been replaced. Use the additive checked
+entrypoints to bind intent to an observed admin-rotation revision:
+
+- `get_admin_rotation_revision() -> u64`
+- `propose_admin_checked(new: Address, expected_revision: u64) -> bool`
+- `accept_admin_checked(expected_revision: u64) -> bool`
+- `cancel_admin_checked(expected_revision: u64) -> bool`
+- `recover_admin_proposal_checked(expected_revision: u64) -> bool`
+
+Read the revision before reading the pending proposal and confirming the action.
+For a consistent multi-query snapshot, read the revision again after the proposal
+and repeat the reads if it changed. Include that revision in the authorized call.
+All existing authorization, delay and expiry rules still apply. Recovery requires
+the current admin and an elapsed delay strictly greater than the proposal TTL;
+acceptance remains allowed at exactly the TTL.
+
+Every successful proposal, acceptance, cancellation or recovery advances the
+revision, including calls to the legacy entrypoints. Exactly one of two requests
+using the same revision can succeed. Repeated requests fail with `StaleNonce`
+without changing storage or emitting successful events, including replacement by
+the same address in the same ledger. On `StaleNonce`, read and review the new state;
+do not blindly substitute a newer revision into an old action. A successful call
+whose response was lost can be diagnosed from the current state and events rather
+than replayed as a new mutation.
+
+The revision is stored in contract instance storage so it cannot independently
+expire while the instance remains live. Missing revision storage on upgrade reads
+as zero; the existing pending-proposal encoding is unchanged. The counter never
+wraps: mutation at `u64::MAX` fails with `PotentialOverflow`, leaving state intact.
+Each successful mutation adds an `admin_rotation_revision` event containing the
+new revision. Existing admin event topics and payloads remain unchanged.
+
+The legacy methods retain their signatures and latest-state behavior. Clients
+must migrate to checked methods for stale-intent protection; legacy calls do not
+gain that protection automatically. Existing deployed proposals can be operated
+on at revision zero after upgrade. See `tests/governance_concurrency.rs` for both
+serialized race orders, migration, retries, authorization and boundary checks.
+
 ## Planned Governance Work
 
 - Governed parameter setter/readiness wiring:

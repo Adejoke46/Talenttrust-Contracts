@@ -47,7 +47,7 @@
 //! the data it protects.
 //!
 use crate::{types::Error, DataKey, Milestone};
-use soroban_sdk::{Env, IntoVal, Symbol, TryFromVal, Val, Vec};
+use soroban_sdk::{Address, Env, IntoVal, Symbol, TryFromVal, Val, Vec};
 
 pub const LEDGERS_PER_DAY: u32 = 17_280;
 
@@ -251,6 +251,29 @@ pub fn extend_participant_contract_index_ttl(env: &Env, key: &crate::DataKey) {
     env.storage()
         .persistent()
         .extend_ttl(key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_TTL_LEDGERS);
+}
+
+/// Extend TTL for a freelancer's pending reputation-credit ledger.
+///
+/// `DataKey::PendingReputationCredits(freelancer)` records credits earned by
+/// completed contracts that have not yet been converted into a reputation
+/// issuance. It lives in `persistent()` storage, so without an explicit bump the
+/// host would evict it after `PERSISTENT_TTL_LEDGERS` (~30 days) of inactivity
+/// and the freelancer's earned credit — their only on-chain claim on a future
+/// issuance — would be lost silently. Accrual, consumption, and balance reads
+/// therefore all renew the entry with the standard persistent policy.
+///
+/// No-op when the ledger entry does not exist, so a read of an empty ledger
+/// never creates one.
+pub fn extend_pending_reputation_credits_ttl(env: &Env, freelancer: &Address) {
+    let key = DataKey::PendingReputationCredits(freelancer.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_TTL_LEDGERS,
+        );
+    }
 }
 
 /// Extend TTL for the governed parameters persistent storage entry.
