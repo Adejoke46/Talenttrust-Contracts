@@ -49,6 +49,28 @@ fn require_valid_milestone_index(env: &Env, milestone_index: u32) {
 
 // ── Public key constructors ───────────────────────────────────────────────────
 
+/// Error code returned when a key constructor receives an invalid
+/// identifier. Kept stable across releases so off-chain tooling and
+/// retry logic can rely on it.
+pub const INVALID_IDENTIFIER_ERROR: u32 = 100;
+
+/// Maximum supported contract identifier. The escrow contract allocates
+
+/// contract ids from a monotonically increasing counter starting at 1, so
+/// 0 and values above this bound are always invalid.
+///
+/// The bound is chosen to be large enough for any realistic deployment
+
+/// while still rejecting obviously corrupt inputs (e.g. `u32::MAX` from a
+/// cast overflow).
+pub const MAX_CONTRACT_ID: u32 = u32::MAX - 1;
+
+/// Maximum supported milestone index within a contract. Milestones are
+
+/// addressed by a zero-based index and the escow layer limits the
+/// number of milestones per contract, so this bound is defensive.
+pub const MAX_MILESTONE_INDEX: u32 = u32::MAX - 1;
+
 /// Returns the persistent storage key tuple for a contract's milestones vector:
 /// `(DataKey::Contract(contract_id), Symbol::new(env, "milestones"))`.
 ///
@@ -66,10 +88,13 @@ pub fn milestone_key(env: &Env, contract_id: u32) -> (DataKey, Symbol) {
 ///
 /// This is a pure function with no inputs to validate.
 pub fn milestone_symbol(env: &Env) -> Symbol {
+
     Symbol::new(env, "milestones")
+
 }
 
 /// Returns the temporary storage key for milestone release approvals:
+
 /// `DataKey::MilestoneApprovals(contract_id, milestone_index)`.
 ///
 /// # Invariants
