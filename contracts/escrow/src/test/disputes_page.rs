@@ -1,6 +1,6 @@
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
-use super::register_client;
+use super::{register_client, PAGE_CEILING};
 use crate::EscrowClient;
 
 /// Create a funded contract with an arbiter, ready for dispute.
@@ -54,6 +54,28 @@ fn start_beyond_end_returns_empty() {
 
     let page = client.get_disputes_page(&100u32, &10u32);
     assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn start_at_u32_max_returns_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let page = client.get_disputes_page(&u32::MAX, &10u32);
+    assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn limit_at_u32_max_is_clamped() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _, _, contract_id) = funded_contract_with_arbiter(&env, &client);
+    client.raise_dispute(&contract_id, &client_addr);
+
+    let page = client.get_disputes_page(&0u32, &u32::MAX);
+    assert_eq!(page.len(), 1);
 }
 
 #[test]
@@ -117,6 +139,22 @@ fn continuation_page_fetches_remaining() {
 }
 
 #[test]
+fn duplicate_raise_dispute_does_not_duplicate_page_entry() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _, _, contract_id) = funded_contract_with_arbiter(&env, &client);
+
+    client.raise_dispute(&contract_id, &client_addr);
+    let result = client.try_raise_dispute(&contract_id, &client_addr);
+    assert!(result.is_err());
+
+    let page = client.get_disputes_page(&0u32, &10u32);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.get(0).unwrap().raised_by, client_addr);
+}
+
+#[test]
 fn limit_clamped_to_page_ceiling() {
     let env = Env::default();
     env.mock_all_auths();
@@ -129,6 +167,24 @@ fn limit_clamped_to_page_ceiling() {
 
     let page = client.get_disputes_page(&0u32, &(crate::PAGE_CEILING * 10));
     assert_eq!(page.len(), 3);
+}
+
+#[test]
+fn limit_exactly_at_page_ceiling_is_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    for _ in 0..3 {
+        let (client_addr, _, _, contract_id) = funded_contract_with_arbiter(&env, &client);
+        client.raise_dispute(&contract_id, &client_addr);
+    }
+
+    let page = client.get_disputes_page(&0u32, &PAGE_CEILING);
+    assert_eq!(page.len(), 3);
+
+    let page_over = client.get_disputes_page(&0u32, &(PAGE_CEILING + 1));
+    assert_eq!(page_over.len(), 3);
 }
 
 #[test]
@@ -174,6 +230,24 @@ fn get_dispute_returns_none_without_active_dispute() {
 
     let meta = client.get_dispute(&contract_id);
     assert!(meta.is_none());
+}
+
+#[test]
+fn get_dispute_returns_none_after_resolution() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _, arbiter_addr, contract_id) = funded_contract_with_arbiter(&env, &client);
+
+    client.raise_dispute(&contract_id, &client_addr);
+    assert!(client.get_dispute(&contract_id).is_some());
+
+    client.resolve_dispute(
+        &contract_id,
+        &arbiter_addr,
+        &crate::DisputeResolution::FullRefund,
+    );
+    assert!(client.get_dispute(&contract_id).is_none());
 }
 
 #[test]

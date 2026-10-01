@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Disputes authorization-matrix tests (issue #21).
 //!
 //! This module provides an exhaustive role-by-action matrix for the two
@@ -20,8 +21,6 @@
 //! - **Section 2** – `resolve_dispute` matrix: who may and may not resolve.
 //! - **Section 3** – State-gate matrix: valid callers, wrong lifecycle state.
 //! - **Section 4** – Edge cases: arbiter == None, double raise, paused contract.
-
-#![cfg(test)]
 
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 

@@ -16,6 +16,7 @@
 //!   - `submit_work_evidence`   — evidence ≤ 256 bytes
 //!   - `issue_reputation`       — rating in [1, 5], comment in [1, 200] bytes
 //!   - `refund_unreleased_milestones` — indices < milestones.len()
+//!   - `create_contract`        — milestone count, amounts, and total cap boundaries
 
 #![cfg(test)]
 
@@ -31,6 +32,7 @@ use crate::{
     ReleaseAuthorization,
     MAX_MILESTONES, MAX_TOTAL_ESCROW_STROOPS,
 };
+use crate::types::MAX_EVIDENCE_LEN;
 
 // ── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -64,6 +66,7 @@ fn setup_with_token(env: &Env) -> (EscrowClient<'_>, Address, Address, Address) 
     (client, client_addr, freelancer_addr, admin)
 }
 
+
 /// Create a funded 1-milestone contract; returns contract_id.
 fn funded_contract(
     env: &Env,
@@ -84,6 +87,7 @@ fn funded_contract(
     id
 }
 
+
 // ── set_protocol_fee_bps ─────────────────────────────────────────────────────
 
 /// Boundary success: exactly 10_000 bps (100 %) must be accepted.
@@ -95,6 +99,7 @@ fn set_protocol_fee_bps_accepts_exactly_10000() {
     assert_eq!(escrow.get_protocol_fee_bps(), 10_000_u32);
 }
 
+
 /// Boundary success: 0 bps (no fee) must be accepted.
 #[test]
 fn set_protocol_fee_bps_accepts_zero() {
@@ -104,6 +109,7 @@ fn set_protocol_fee_bps_accepts_zero() {
     assert_eq!(escrow.get_protocol_fee_bps(), 0_u32);
 }
 
+
 /// Typical mid-range value (500 bps = 5 %) must be accepted.
 #[test]
 fn set_protocol_fee_bps_accepts_typical_value() {
@@ -112,6 +118,7 @@ fn set_protocol_fee_bps_accepts_typical_value() {
     assert!(escrow.set_protocol_fee_bps(&500_u32));
     assert_eq!(escrow.get_protocol_fee_bps(), 500_u32);
 }
+
 
 /// One above the maximum (10_001 bps) must be rejected with InvalidProtocolParameters.
 #[test]
@@ -128,6 +135,7 @@ fn set_protocol_fee_bps_rejects_10001() {
     }
 }
 
+
 /// u32::MAX must be rejected with InvalidProtocolParameters.
 #[test]
 fn set_protocol_fee_bps_rejects_u32_max() {
@@ -143,6 +151,7 @@ fn set_protocol_fee_bps_rejects_u32_max() {
     }
 }
 
+
 /// Rejected calls must not mutate the stored fee.
 #[test]
 fn set_protocol_fee_bps_rejected_call_leaves_fee_unchanged() {
@@ -155,6 +164,7 @@ fn set_protocol_fee_bps_rejected_call_leaves_fee_unchanged() {
     // Fee must still be the previously accepted value.
     assert_eq!(escrow.get_protocol_fee_bps(), 250_u32);
 }
+
 
 // ── deposit_funds ────────────────────────────────────────────────────────────
 
@@ -181,6 +191,7 @@ fn deposit_funds_rejects_zero_amount() {
     }
 }
 
+
 /// Negative deposit must be rejected with AmountMustBePositive.
 #[test]
 fn deposit_funds_rejects_negative_amount() {
@@ -204,6 +215,7 @@ fn deposit_funds_rejects_negative_amount() {
     }
 }
 
+
 /// Deposit exactly equal to the contract total must be accepted.
 #[test]
 fn deposit_funds_accepts_exact_total() {
@@ -220,6 +232,7 @@ fn deposit_funds_accepts_exact_total() {
     );
     assert!(escrow.deposit_funds(&id, &client_addr, &amount));
 }
+
 
 /// Deposit exceeding the remaining capacity must be rejected.
 #[test]
@@ -239,6 +252,7 @@ fn deposit_funds_rejects_amount_over_remaining() {
     let result = escrow.try_deposit_funds(&id, &client_addr, &(amount + 1));
     assert!(result.is_err(), "deposit over cap must be rejected");
 }
+
 
 // ── release_milestone — milestone_index bounds ───────────────────────────────
 
@@ -261,6 +275,7 @@ fn release_milestone_rejects_index_equal_to_count() {
     }
 }
 
+
 /// u32::MAX index must be rejected with IndexOutOfBounds.
 #[test]
 fn release_milestone_rejects_u32_max_index() {
@@ -277,6 +292,7 @@ fn release_milestone_rejects_u32_max_index() {
     }
 }
 
+
 /// Index 0 on a 1-milestone contract must be accepted (after approval).
 #[test]
 fn release_milestone_accepts_index_zero_on_single_milestone() {
@@ -286,6 +302,7 @@ fn release_milestone_accepts_index_zero_on_single_milestone() {
     escrow.approve_milestone_release(&id, &client_addr, &0);
     assert!(escrow.release_milestone(&id, &client_addr, &0));
 }
+
 
 // ── approve_milestone_release — milestone_index bounds ───────────────────────
 
@@ -306,6 +323,7 @@ fn approve_milestone_release_rejects_index_equal_to_count() {
     }
 }
 
+
 /// u32::MAX index must be rejected.
 #[test]
 fn approve_milestone_release_rejects_u32_max_index() {
@@ -322,6 +340,7 @@ fn approve_milestone_release_rejects_u32_max_index() {
     }
 }
 
+
 /// Valid index 0 must be accepted.
 #[test]
 fn approve_milestone_release_accepts_valid_index() {
@@ -330,6 +349,7 @@ fn approve_milestone_release_accepts_valid_index() {
     let id = funded_contract(&env, &escrow, &client_addr, &freelancer_addr, 100_0000000);
     assert!(escrow.approve_milestone_release(&id, &client_addr, &0));
 }
+
 
 // ── submit_work_evidence — evidence length bounds ────────────────────────────
 
@@ -343,6 +363,7 @@ fn submit_work_evidence_accepts_256_bytes() {
     let s: soroban_sdk::String = soroban_sdk::String::from_str(&env, &"x".repeat(256));
     assert!(escrow.submit_work_evidence(&id, &freelancer_addr, &0, &s));
 }
+
 
 /// Evidence of 257 bytes must be rejected with EvidenceTooLong.
 #[test]
@@ -361,6 +382,7 @@ fn submit_work_evidence_rejects_257_bytes() {
     }
 }
 
+
 /// Evidence of 1 byte must be accepted.
 #[test]
 fn submit_work_evidence_accepts_one_byte() {
@@ -370,6 +392,7 @@ fn submit_work_evidence_accepts_one_byte() {
     let s: soroban_sdk::String = soroban_sdk::String::from_str(&env, "a");
     assert!(escrow.submit_work_evidence(&id, &freelancer_addr, &0, &s));
 }
+
 
 /// submit_work_evidence must also check milestone_index bounds.
 #[test]
@@ -389,6 +412,7 @@ fn submit_work_evidence_rejects_out_of_bounds_index() {
     }
 }
 
+
 // ── issue_reputation — rating and comment bounds ─────────────────────────────
 
 /// Helper: drive a contract to Completed status.
@@ -404,6 +428,7 @@ fn complete_contract_for_reputation(
     id
 }
 
+
 /// Rating of 1 (minimum) must be accepted.
 #[test]
 fn issue_reputation_accepts_rating_1() {
@@ -414,6 +439,7 @@ fn issue_reputation_accepts_rating_1() {
     assert!(escrow.issue_reputation(&id, &client_addr, &1_u32, &comment));
 }
 
+
 /// Rating of 5 (maximum) must be accepted.
 #[test]
 fn issue_reputation_accepts_rating_5() {
@@ -423,6 +449,7 @@ fn issue_reputation_accepts_rating_5() {
     let comment = soroban_sdk::String::from_str(&env, "Excellent");
     assert!(escrow.issue_reputation(&id, &client_addr, &5_u32, &comment));
 }
+
 
 /// Rating of 0 must be rejected with InvalidRating.
 #[test]
@@ -441,6 +468,7 @@ fn issue_reputation_rejects_rating_0() {
     }
 }
 
+
 /// Rating of 6 must be rejected with InvalidRating.
 #[test]
 fn issue_reputation_rejects_rating_6() {
@@ -458,6 +486,7 @@ fn issue_reputation_rejects_rating_6() {
     }
 }
 
+
 /// Comment of exactly 200 bytes must be accepted.
 #[test]
 fn issue_reputation_accepts_comment_200_bytes() {
@@ -467,6 +496,7 @@ fn issue_reputation_accepts_comment_200_bytes() {
     let comment = soroban_sdk::String::from_str(&env, &"a".repeat(200));
     assert!(escrow.issue_reputation(&id, &client_addr, &5_u32, &comment));
 }
+
 
 /// Comment of 201 bytes must be rejected with CommentTooLong.
 #[test]
@@ -485,6 +515,7 @@ fn issue_reputation_rejects_comment_201_bytes() {
     }
 }
 
+
 /// Empty comment must be rejected with EmptyComment.
 #[test]
 fn issue_reputation_rejects_empty_comment() {
@@ -501,6 +532,7 @@ fn issue_reputation_rejects_empty_comment() {
         other => panic!("expected EmptyComment, got {:?}", other),
     }
 }
+
 
 // ── refund_unreleased_milestones — index bounds ──────────────────────────────
 
@@ -530,6 +562,7 @@ fn refund_unreleased_milestones_rejects_out_of_bounds_index() {
     }
 }
 
+
 /// u32::MAX index must be rejected with IndexOutOfBounds.
 #[test]
 fn refund_unreleased_milestones_rejects_u32_max_index() {
@@ -554,6 +587,7 @@ fn refund_unreleased_milestones_rejects_u32_max_index() {
     }
 }
 
+
 // ── Regression: existing valid inputs still accepted ─────────────────────────
 
 /// A standard 3-milestone contract with typical amounts must still be created.
@@ -568,6 +602,7 @@ fn regression_standard_three_milestone_contract_accepted() {
     assert!(id > 0 || id == 0, "contract id must be a valid u32");
 }
 
+
 /// set_protocol_fee_bps can be updated multiple times with valid values.
 #[test]
 fn regression_set_protocol_fee_bps_multiple_updates() {
@@ -579,3 +614,4 @@ fn regression_set_protocol_fee_bps_multiple_updates() {
     assert!(escrow.set_protocol_fee_bps(&10_000_u32));
     assert_eq!(escrow.get_protocol_fee_bps(), 10_000_u32);
 }
+

@@ -1,4 +1,4 @@
-//! Tests for the admin-configurable storage limit (#901).
+//! Tests for the admin-configurable storage limit.
 //!
 //! Coverage matrix
 //! ───────────────
@@ -16,8 +16,9 @@
 use super::assert_contract_error;
 use soroban_sdk::{
     testutils::{Address as _, Events},
-    Address, Env, Symbol, TryFromVal,
+    Address, Env, Symbol,
 };
+use soroban_sdk::TryFromVal;
 
 use crate::{
     Error, Escrow, EscrowClient, DEFAULT_STORAGE_LIMIT, MAX_STORAGE_LIMIT, MIN_STORAGE_LIMIT,
@@ -65,25 +66,21 @@ fn get_storage_limit_returns_default_before_any_set() {
 fn set_storage_limit_persists_and_get_reflects_it() {
     let ctx = Ctx::new();
     let new_limit: u32 = 128_000;
-    assert!(ctx.escrow().set_storage_limit(&ctx.admin, &new_limit));
+    ctx.escrow().set_storage_limit(&ctx.admin, &new_limit);
     assert_eq!(ctx.escrow().get_storage_limit(), new_limit);
 }
 
 #[test]
 fn set_storage_limit_min_boundary_accepted() {
     let ctx = Ctx::new();
-    assert!(ctx
-        .escrow()
-        .set_storage_limit(&ctx.admin, &MIN_STORAGE_LIMIT));
+    ctx.escrow().set_storage_limit(&ctx.admin, &MIN_STORAGE_LIMIT);
     assert_eq!(ctx.escrow().get_storage_limit(), MIN_STORAGE_LIMIT);
 }
 
 #[test]
 fn set_storage_limit_max_boundary_accepted() {
     let ctx = Ctx::new();
-    assert!(ctx
-        .escrow()
-        .set_storage_limit(&ctx.admin, &MAX_STORAGE_LIMIT));
+    ctx.escrow().set_storage_limit(&ctx.admin, &MAX_STORAGE_LIMIT);
     assert_eq!(ctx.escrow().get_storage_limit(), MAX_STORAGE_LIMIT);
 }
 
@@ -91,9 +88,7 @@ fn set_storage_limit_max_boundary_accepted() {
 fn set_storage_limit_default_value_accepted() {
     let ctx = Ctx::new();
     // Explicit set to default must succeed (it's in-range)
-    assert!(ctx
-        .escrow()
-        .set_storage_limit(&ctx.admin, &DEFAULT_STORAGE_LIMIT));
+    ctx.escrow().set_storage_limit(&ctx.admin, &DEFAULT_STORAGE_LIMIT);
     assert_eq!(ctx.escrow().get_storage_limit(), DEFAULT_STORAGE_LIMIT);
 }
 
@@ -169,7 +164,7 @@ fn set_storage_limit_same_value_twice_succeeds() {
     let ctx = Ctx::new();
     ctx.escrow().set_storage_limit(&ctx.admin, &50_000u32);
     // Setting the identical value again must not error
-    assert!(ctx.escrow().set_storage_limit(&ctx.admin, &50_000u32));
+    ctx.escrow().set_storage_limit(&ctx.admin, &50_000u32);
     assert_eq!(ctx.escrow().get_storage_limit(), 50_000);
 }
 
