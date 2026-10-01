@@ -17,6 +17,7 @@
 //! | `submit_work_evidence`                         | ❌ | ❌ | ✅ | ❌ | ❌ | `UnauthorizedRole` |
 //! | `refund_unreleased_milestones`                 | ❌ | ✅ | ❌ | ❌ | ❌ | `UnauthorizedRole` |
 //! | `get_milestones`                               | ✅ | ✅ | ✅ | ✅ | ✅ | (read-only query)  |
+//! | `get_milestone_count`                          | ✅ | ✅ | ✅ | ✅ | ✅ | (read-only query)  |
 //! | `get_milestone`                                 | ✅ | ✅ | ✅ | ✅ | ✅ | (read-only query)  |
 //! | `get_milestone_approvals`                       | ✅ | ✅ | ✅ | ✅ | ✅ | (read-only query)  |
 //! | `get_approval_deadline`                        | ✅ | ✅ | ✅ | ✅ | ✅ | (read-only query)  |

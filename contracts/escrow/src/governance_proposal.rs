@@ -81,6 +81,17 @@ fn require_not_expired(env: &Env, proposal: &GovernanceProposal) {
     }
 }
 
+/// Assert the proposal is in the expected state, panicking with
+/// `GovernanceProposalInvalidState` otherwise.
+///
+/// Centralising this check keeps every transition's state invariant
+/// explicit and prevents accidental drift between entry points.
+fn require_state(env: &Env, proposal: &GovernanceProposal, expected: GovernanceProposalState) {
+    if proposal.state != expected {
+        env.panic_with_error(Error::GovernanceProposalInvalidState);
+    }
+}
+
 /// Validate that the payload carried in `kind` satisfies the same bounds
 /// enforced by the corresponding live setter.
 fn validate_kind(env: &Env, kind: &GovernanceProposalKind) {
@@ -237,6 +248,10 @@ impl Escrow {
         let proposed_at = env.ledger().sequence();
         let expires_at = proposed_at.saturating_add(GOVERNANCE_PROPOSAL_TTL_LEDGERS);
 
+        // Invariant: the freshly created proposal must start in `Pending`
+        // and must not already be expired.
+        debug_assert!(expires_at > proposed_at);
+
         let proposal = GovernanceProposal {
             proposal_id,
             requester: admin.clone(),
@@ -287,9 +302,7 @@ impl Escrow {
         let mut proposal = load_proposal(&env, proposal_id);
         require_not_expired(&env, &proposal);
 
-        if proposal.state != GovernanceProposalState::Pending {
-            env.panic_with_error(Error::GovernanceProposalInvalidState);
-        }
+        require_state(&env, &proposal, GovernanceProposalState::Pending);
 
         // Prohibit self-approval: the approver must differ from the requester.
         if approver == proposal.requester {
@@ -333,9 +346,7 @@ impl Escrow {
         let mut proposal = load_proposal(&env, proposal_id);
         require_not_expired(&env, &proposal);
 
-        if proposal.state != GovernanceProposalState::Pending {
-            env.panic_with_error(Error::GovernanceProposalInvalidState);
-        }
+        require_state(&env, &proposal, GovernanceProposalState::Pending);
 
         if approver == proposal.requester {
             env.panic_with_error(Error::GovernanceSelfApproval);
@@ -388,9 +399,7 @@ impl Escrow {
         let mut proposal = load_proposal(&env, proposal_id);
         require_not_expired(&env, &proposal);
 
-        if proposal.state != GovernanceProposalState::Approved {
-            env.panic_with_error(Error::GovernanceProposalInvalidState);
-        }
+        require_state(&env, &proposal, GovernanceProposalState::Approved);
 
         // Materialise the parameter change.
         apply_kind(&env, &proposal.kind);
@@ -398,6 +407,9 @@ impl Escrow {
         // Mark as applied so a second call fails.
         proposal.state = GovernanceProposalState::Applied;
         save_proposal(&env, &proposal);
+
+        // Invariant: once applied, the proposal must be terminal.
+        debug_assert!(proposal.state == GovernanceProposalState::Applied);
 
         env.events().publish(
             (symbol_short!("gov"), Symbol::new(&env, "applied")),
