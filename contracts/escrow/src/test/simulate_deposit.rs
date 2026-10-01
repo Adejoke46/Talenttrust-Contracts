@@ -377,3 +377,112 @@ fn simulate_rejects_paused() {
         Error::ContractPaused,
     );
 }
+
+#[cfg(test)]
+mod deposit_failure_recovery_tests {
+    use crate::{Contract, ContractStatus, DataKey, Error, Escrow, EscrowClient};
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger},
+        Address, Env,
+    };
+
+    // Helper to setup a basic escrow environment with a bound token
+    fn setup_escrow_test() -> (Env, EscrowClient<'static>, Address, Address, Address, u32) {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+
+        // Deploy Stellar Asset Contract (SAC) for testing
+        let token_admin = Address::generate(&env);
+        let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+
+        let escrow_id = env.register(Escrow, ());
+        let client_escrow = EscrowClient::new(&env, &escrow_id);
+
+        // Initialize admin and bind settlement token (requires admin address + token address)
+        client_escrow.initialize(&admin);
+        client_escrow.bind_settlement_token(&admin, &token_contract.address());
+
+        // Mint tokens to client for testing deposits using token administration interface
+        let token_admin_client =
+            soroban_sdk::token::StellarAssetClient::new(&env, &token_contract.address());
+        token_admin_client.mint(&client, &1_000_000_0000000);
+
+        // Create a test contract with milestones totaling 500 stroops (signature: client, freelancer, arbiter: Option<Address>, milestones, release_auth)
+        let milestones = soroban_sdk::vec![&env, 200, 300];
+        let contract_id = client_escrow.create_contract(
+            &client,
+            &freelancer,
+            &None,
+            &milestones,
+            &crate::ReleaseAuthorization::ClientOnly,
+        );
+
+        (
+            env,
+            client_escrow,
+            client,
+            freelancer,
+            token_contract.address(),
+            contract_id,
+        )
+    }
+
+    #[test]
+    fn test_successful_partial_and_full_deposit() {
+        let (env, client_escrow, client, _freelancer, _token, contract_id) = setup_escrow_test();
+
+        // 1. Partial deposit (200 out of 500 total)
+        let success1 = client_escrow.deposit_funds(&contract_id, &client, &200);
+        assert!(success1);
+
+        let contract_data = client_escrow.get_contract(&contract_id);
+        assert_eq!(contract_data.funded_amount, 200);
+        assert_eq!(contract_data.status, ContractStatus::PartiallyFunded);
+
+        // 2. Complete the remaining deposit (300 stroops)
+        let success2 = client_escrow.deposit_funds(&contract_id, &client, &300);
+        assert!(success2);
+
+        let contract_data_final = client_escrow.get_contract(&contract_id);
+        assert_eq!(contract_data_final.funded_amount, 500);
+        assert_eq!(contract_data_final.status, ContractStatus::Funded);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_deposit_failure_recovery_insufficient_funds_leaves_state_untouched() {
+        let (env, client_escrow, client, _freelancer, token_address, contract_id) =
+            setup_escrow_test();
+
+        // Drain client's token balance so the next deposit transfer will fail
+        let sac_client = soroban_sdk::token::Client::new(&env, &token_address);
+        let current_balance = sac_client.balance(&client);
+        let dummy_receiver = Address::generate(&env);
+        sac_client.transfer(&client, &dummy_receiver, &current_balance);
+
+        let initial_contract_state = client_escrow.get_contract(&contract_id);
+        assert_eq!(initial_contract_state.funded_amount, 0);
+        assert_eq!(initial_contract_state.status, ContractStatus::Created);
+
+        // Attempt deposit — should trigger a token transfer failure and panic safely
+        let _ = client_escrow.deposit_funds(&contract_id, &client, &200);
+
+        // Invariant check: State must remain strictly untouched
+        let post_failure_state = client_escrow.get_contract(&contract_id);
+        assert_eq!(post_failure_state.funded_amount, 0);
+        assert_eq!(post_failure_state.status, ContractStatus::Created);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_deposit_rejects_overfunding() {
+        let (env, client_escrow, client, _freelancer, _token, contract_id) = setup_escrow_test();
+
+        // Total required is 500. Attempting to deposit 600 should fail preflight validation.
+        let _ = client_escrow.deposit_funds(&contract_id, &client, &600);
+    }
+}

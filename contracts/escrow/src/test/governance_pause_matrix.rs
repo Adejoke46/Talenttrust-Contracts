@@ -1,4 +1,5 @@
 //! Pause / emergency interaction matrix for governance setters.
+//! Pause / emergency interaction matrix for governance setters.
 //!
 //! Issue #742: TESTS below pin down the intended behaviour that governance
 //! setters (`set_protocol_fee_bps`, `set_governed_params`,
@@ -38,12 +39,14 @@
 //! return; failure paths use `try_*` + `assert_contract_error`.
 
 use crate::{Error, Escrow, EscrowClient, EscrowError, GovernedParameters, ReleaseAuthorization};
+use crate::{Error, Escrow, EscrowClient, EscrowError, GovernedParameters, ReleaseAuthorization};
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Register, initialize, mock all auths, and return `(env, contract_id, admin)`.
 /// Register, initialize, mock all auths, and return `(env, contract_id, admin)`.
 fn setup_initialized() -> (Env, Address, Address) {
     let env = Env::default();
@@ -55,6 +58,7 @@ fn setup_initialized() -> (Env, Address, Address) {
     (env, contract_id, admin)
 }
 
+/// Register, initialize with non-root auth for SAC, return `(env, addr, admin)`.
 /// Register, initialize with non-root auth for SAC, return `(env, addr, admin)`.
 fn setup_initialized_sac() -> (Env, Address, Address) {
     let env = Env::default();
@@ -73,6 +77,7 @@ fn setup_initialized_sac() -> (Env, Address, Address) {
 // ── set_protocol_fee_bps ───────────────────────────────────────────────────
 
 #[test]
+#[test]
 fn set_protocol_fee_bps_succeeds_when_normal() {
     let (env, contract_id, _admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
@@ -81,6 +86,7 @@ fn set_protocol_fee_bps_succeeds_when_normal() {
     assert_eq!(client.get_protocol_fee_bps(), 500);
 }
 
+#[test]
 #[test]
 fn set_protocol_fee_bps_succeeds_when_paused() {
     let (env, contract_id, _admin) = setup_initialized();
@@ -94,6 +100,7 @@ fn set_protocol_fee_bps_succeeds_when_paused() {
     assert_eq!(client.get_protocol_fee_bps(), 750);
 }
 
+#[test]
 #[test]
 fn set_protocol_fee_bps_succeeds_when_emergency() {
     let (env, contract_id, _admin) = setup_initialized();
@@ -110,6 +117,7 @@ fn set_protocol_fee_bps_succeeds_when_emergency() {
 // ── set_governed_params ────────────────────────────────────────────────────
 
 #[test]
+#[test]
 fn set_governed_params_succeeds_when_normal() {
     let (env, contract_id, admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
@@ -120,6 +128,7 @@ fn set_governed_params_succeeds_when_normal() {
     assert_eq!(params.max_escrow_total_stroops, 1_000_000_000);
 }
 
+#[test]
 #[test]
 fn set_governed_params_succeeds_when_paused() {
     let (env, contract_id, admin) = setup_initialized();
@@ -134,6 +143,7 @@ fn set_governed_params_succeeds_when_paused() {
     assert_eq!(params.max_escrow_total_stroops, 500_000_000);
 }
 
+#[test]
 #[test]
 fn set_governed_params_succeeds_when_emergency() {
     let (env, contract_id, admin) = setup_initialized();
@@ -155,6 +165,7 @@ fn set_governed_params_succeeds_when_emergency() {
 // creates a fresh contract so the first bind succeeds in the target state.
 
 #[test]
+#[test]
 fn bind_settlement_token_succeeds_when_normal() {
     let (env, contract_id, admin) = setup_initialized_sac();
     let client = EscrowClient::new(&env, &contract_id);
@@ -164,6 +175,7 @@ fn bind_settlement_token_succeeds_when_normal() {
     assert_eq!(client.get_settlement_token(), Some(token));
 }
 
+#[test]
 #[test]
 fn bind_settlement_token_succeeds_when_paused() {
     let (env, contract_id, admin) = setup_initialized_sac();
@@ -177,6 +189,7 @@ fn bind_settlement_token_succeeds_when_paused() {
     assert_eq!(client.get_settlement_token(), Some(token));
 }
 
+#[test]
 #[test]
 fn bind_settlement_token_succeeds_when_emergency() {
     let (env, contract_id, admin) = setup_initialized_sac();
@@ -195,6 +208,7 @@ fn bind_settlement_token_succeeds_when_emergency() {
 // ===========================================================================
 
 #[test]
+#[test]
 fn pause_sets_only_paused_not_emergency() {
     let (env, contract_id, _admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
@@ -212,6 +226,7 @@ fn pause_sets_only_paused_not_emergency() {
 }
 
 #[test]
+#[test]
 fn emergency_sets_both_paused_and_emergency() {
     let (env, contract_id, _admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
@@ -225,6 +240,7 @@ fn emergency_sets_both_paused_and_emergency() {
     assert!(client.is_emergency());
 }
 
+#[test]
 #[test]
 fn unpause_clears_paused_only() {
     let (env, contract_id, _admin) = setup_initialized();
@@ -250,6 +266,7 @@ fn unpause_clears_paused_only() {
 // this test must be updated.
 
 #[test]
+#[test]
 fn resolve_emergency_clears_both_flags() {
     let (env, contract_id, _admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
@@ -274,6 +291,7 @@ fn resolve_emergency_clears_both_flags() {
 }
 
 #[test]
+#[test]
 fn resolve_emergency_then_unpause_succeeds() {
     let (env, contract_id, _admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
@@ -288,6 +306,7 @@ fn resolve_emergency_then_unpause_succeeds() {
     assert!(!client.is_paused());
 }
 
+#[test]
 #[test]
 fn pause_independent_of_emergency_after_resolve() {
     /// Scenario: pause → emergency → resolve → pause again should work
@@ -317,6 +336,7 @@ fn pause_independent_of_emergency_after_resolve() {
 // ── Double-bind protection ──────────────────────────────────────────────────
 
 #[test]
+#[test]
 fn bind_settlement_token_rejects_double_bind_when_normal() {
     let (env, contract_id, admin) = setup_initialized_sac();
     let client = EscrowClient::new(&env, &contract_id);
@@ -331,6 +351,7 @@ fn bind_settlement_token_rejects_double_bind_when_normal() {
     );
 }
 
+#[test]
 #[test]
 fn bind_settlement_token_rejects_double_bind_when_paused() {
     let (env, contract_id, admin) = setup_initialized_sac();
@@ -348,6 +369,7 @@ fn bind_settlement_token_rejects_double_bind_when_paused() {
     );
 }
 
+#[test]
 #[test]
 fn bind_settlement_token_rejects_double_bind_when_emergency() {
     let (env, contract_id, admin) = setup_initialized_sac();
@@ -368,6 +390,7 @@ fn bind_settlement_token_rejects_double_bind_when_emergency() {
 // ── unpause blocked while emergency active ──────────────────────────────────
 
 #[test]
+#[test]
 fn unpause_rejected_during_emergency() {
     let (env, contract_id, _admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
@@ -380,6 +403,7 @@ fn unpause_rejected_during_emergency() {
 
 // ── Governance setters fail with correct error for invalid values ───────────
 
+#[test]
 #[test]
 fn set_protocol_fee_bps_rejects_over_max_when_paused() {
     let (env, contract_id, _admin) = setup_initialized();
@@ -395,6 +419,7 @@ fn set_protocol_fee_bps_rejects_over_max_when_paused() {
 }
 
 #[test]
+#[test]
 fn set_protocol_fee_bps_rejects_over_max_when_emergency() {
     let (env, contract_id, _admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
@@ -407,6 +432,7 @@ fn set_protocol_fee_bps_rejects_over_max_when_emergency() {
 }
 
 #[test]
+#[test]
 fn set_governed_params_rejects_invalid_bps_when_paused() {
     let (env, contract_id, admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
@@ -418,6 +444,7 @@ fn set_governed_params_rejects_invalid_bps_when_paused() {
     );
 }
 
+#[test]
 #[test]
 fn set_governed_params_rejects_invalid_bps_when_emergency() {
     let (env, contract_id, admin) = setup_initialized();
