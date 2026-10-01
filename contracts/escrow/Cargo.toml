@@ -18,3 +18,7 @@ proptest = "1.4.0"
 [[test]]
 name = "abi_reference_doc_test"
 path = "../../tests/abi_reference_doc_test.rs"
+
+[[test]]
+name = "create_contract_invariants"
+path = "../../tests/create_contract_invariants.rs"

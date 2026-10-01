@@ -74,8 +74,11 @@ impl Escrow {
         }
 
         let milestone_key = keys::milestone_key(&env, contract_id);
-        let mut milestones: Vec<Milestone> =
-            env.storage().persistent().get(&milestone_key).unwrap();
+        let mut milestones: Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&milestone_key)
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         ttl::extend_milestone_ttl(&env, contract_id);
 
@@ -83,7 +86,10 @@ impl Escrow {
             env.panic_with_error(Error::IndexOutOfBounds);
         }
 
-        let mut milestone = milestones.get(milestone_index).unwrap().clone();
+        let mut milestone = milestones
+            .get(milestone_index)
+            .unwrap_or_else(|| env.panic_with_error(Error::IndexOutOfBounds))
+            .clone();
 
         let milestone_released_key = DataKey::MilestoneReleased(contract_id, milestone_index);
         let is_already_released: bool = env
@@ -180,12 +186,9 @@ impl Escrow {
         let all_released = milestones.iter().all(|m| m.released || m.refunded);
         if all_released {
             contract.status = ContractStatus::Completed;
-            let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
-            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-            let new_pending = pending
-                .checked_add(1)
-                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-            env.storage().persistent().set(&pending_key, &new_pending);
+            // Route through the single accrual policy owned by `lib.rs` so the
+            // credit ledger cannot diverge between release paths.
+            Self::grant_pending_reputation_credit(env, &contract.freelancer);
         }
 
         env.storage().persistent().set(&milestone_key, &milestones);
@@ -263,16 +266,23 @@ impl Escrow {
         }
 
         let milestone_key = keys::milestone_key(&env, contract_id);
-        let mut milestones: Vec<Milestone> =
-            env.storage().persistent().get(&milestone_key).unwrap();
+        let mut milestones: Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&milestone_key)
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         ttl::extend_milestone_ttl(&env, contract_id);
 
         let batch_len = milestone_indices.len();
         for i in 0..batch_len {
-            let idx_i = milestone_indices.get(i).unwrap();
+            let idx_i = milestone_indices
+                .get(i)
+                .unwrap_or_else(|| env.panic_with_error(Error::IndexOutOfBounds));
             for j in (i + 1)..batch_len {
-                let idx_j = milestone_indices.get(j).unwrap();
+                let idx_j = milestone_indices
+                    .get(j)
+                    .unwrap_or_else(|| env.panic_with_error(Error::IndexOutOfBounds));
                 if idx_i == idx_j {
                     env.panic_with_error(Error::DuplicateMilestoneInBatch);
                 }
@@ -281,12 +291,16 @@ impl Escrow {
 
         let mut total_gross_amount: i128 = 0;
         for i in 0..batch_len {
-            let milestone_index = milestone_indices.get(i).unwrap();
+            let milestone_index = milestone_indices
+                .get(i)
+                .unwrap_or_else(|| env.panic_with_error(Error::IndexOutOfBounds));
             if milestone_index >= milestones.len() {
                 env.panic_with_error(Error::IndexOutOfBounds);
             }
 
-            let milestone = milestones.get(milestone_index).unwrap();
+            let milestone = milestones
+                .get(milestone_index)
+                .unwrap_or_else(|| env.panic_with_error(Error::IndexOutOfBounds));
             let milestone_released_key = DataKey::MilestoneReleased(contract_id, milestone_index);
             let is_already_released: bool = env
                 .storage()
@@ -337,8 +351,12 @@ impl Escrow {
         let mut total_protocol_fees: i128 = 0;
         if fee_bps > 0 {
             for i in 0..batch_len {
-                let milestone_index = milestone_indices.get(i).unwrap();
-                let milestone = milestones.get(milestone_index).unwrap();
+                let milestone_index = milestone_indices
+                    .get(i)
+                    .unwrap_or_else(|| env.panic_with_error(Error::IndexOutOfBounds));
+                let milestone = milestones
+                    .get(milestone_index)
+                    .unwrap_or_else(|| env.panic_with_error(Error::IndexOutOfBounds));
                 let fee = Self::calculate_protocol_fee(&env, milestone.amount, fee_bps);
                 total_protocol_fees = total_protocol_fees
                     .checked_add(fee)
@@ -349,8 +367,13 @@ impl Escrow {
         // Pass 2: Atomic State Updates (Checks-Effects-Interactions)
         // All state changes happen before any token transfers
         for i in 0..batch_len {
-            let milestone_index = milestone_indices.get(i).unwrap();
-            let mut milestone = milestones.get(milestone_index).unwrap().clone();
+            let milestone_index = milestone_indices
+                .get(i)
+                .unwrap_or_else(|| env.panic_with_error(Error::IndexOutOfBounds));
+            let mut milestone = milestones
+                .get(milestone_index)
+                .unwrap_or_else(|| env.panic_with_error(Error::IndexOutOfBounds))
+                .clone();
 
             let milestone_released_key = DataKey::MilestoneReleased(contract_id, milestone_index);
             env.storage()
@@ -398,21 +421,21 @@ impl Escrow {
             .persistent()
             .get(&DataKey::AccumulatedProtocolFees)
             .unwrap_or(0);
-        let invariant_sum =
-            contract.released_amount + contract.refunded_amount + final_accumulated_fees;
-        if invariant_sum > contract.funded_amount {
-            env.panic_with_error(Error::AccountingInvariantViolated);
+        if let Err(e) = crate::amount_validation::validate_accounting_invariant(
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+            final_accumulated_fees,
+        ) {
+            env.panic_with_error(e);
         }
 
         let all_released = milestones.iter().all(|m| m.released || m.refunded);
         if all_released {
             contract.status = ContractStatus::Completed;
-            let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
-            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-            let new_pending = pending
-                .checked_add(1)
-                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-            env.storage().persistent().set(&pending_key, &new_pending);
+            // Route through the single accrual policy owned by `lib.rs` so the
+            // credit ledger cannot diverge between release paths.
+            Self::grant_pending_reputation_credit(env, &contract.freelancer);
         }
 
         env.storage().persistent().set(&milestone_key, &milestones);
