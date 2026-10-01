@@ -218,6 +218,12 @@ pub enum DataKey {
     /// All milestone amounts must be exactly representable at this scale (i.e.
     /// `amount % 10^decimals == 0` when interpreted as a human-visible value).
     TokenScale,
+    // Concurrent-execution hardening (#1535)
+    /// Per-contract mutation lock marking that a storage-mutating entrypoint is
+    /// currently in flight.  Written before the first state change and removed
+    /// when the guarded scope ends; never present outside an active call, so an
+    /// unexpired entry here means a mutation is in progress.  Stored as `bool`.
+    ContractMutationLock(u32),
 }
 
 // ── Two-step Governance Proposal (Issue #1221) ───────────────────────────────
@@ -416,11 +422,27 @@ pub enum Error {
     /// one recorded at contract-creation time.  Re-binding with a different
     /// token scale is not allowed after contracts exist.
     TokenScaleMismatch = 83,
-    /// Finalization refused: the contract is in a sealable state but its
-    /// milestone vector is missing, so a complete and accurate close summary
-    /// cannot be built.  Nothing is written; the contract stays mutable so the
-    /// milestone entry can be restored and the seal retried.
-    FinalizationStateIncomplete = 84,
+    /// A mutation was submitted against an obsolete milestone version.
+    StaleMilestoneVersion = 84,
+    /// The expected-version vector does not match the milestone-index vector.
+    InvalidVersionCount = 85,
+    // Concurrent-execution hardening (#1535)
+    /// A storage-mutating operation for this contract is already in flight.
+    ///
+    /// Raised when a re-entrant or interleaved call tries to acquire the
+    /// per-contract mutation lock while another mutation still holds it.  On
+    /// Soroban a transaction is atomic, so seeing this error means a token
+    /// callback re-entered the escrow mid-transfer, or a caller issued two
+    /// overlapping mutations for the same contract.
+    ConcurrentMutation = 86,
+    /// The persisted contract record violates a storage invariant.
+    ///
+    /// Raised when a loaded contract, or the record about to be written, has
+    /// negative accounting fields, a released/refunded sum that exceeds the
+    /// funded amount, or a milestone in an impossible state.  A healthy
+    /// contract can never produce this error, so it always signals corrupted
+    /// or stale on-ledger state discovered before it could be propagated.
+    StorageInvariantViolated = 87,
 }
 
 // ── Core contract state ──────────────────────────────────────────────────────

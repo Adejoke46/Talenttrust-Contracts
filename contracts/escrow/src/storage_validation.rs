@@ -47,9 +47,10 @@ use crate::milestones_consts::{
     MAX_FEE_BPS, MAX_MILESTONES, MAX_RATING, MAX_REPUTATION_CONFIG_COMMENT_BYTES_CEILING,
     MAX_REPUTATION_CONFIG_RATING_CEILING, MIN_COMMENT_BYTES, MIN_RATING,
 };
+use crate::types::{Contract, DataKey, Milestone};
 use crate::{Error, EscrowError};
-use soroban_sdk::Env;
 use soroban_sdk::panic_with_error;
+use soroban_sdk::{Env, Vec};
 
 // ── validate_escrow_total_cap ────────────────────────────────────────────────
 
@@ -303,21 +304,210 @@ pub(crate) fn validate_stroop_amount(env: &Env, amount: i128) {
     validate_stroop_amount_value(amount).unwrap_or_else(|err| env.panic_with_error(err));
 }
 
-pub(crate) fn validate_stroop_amount_value(amount: i128) -> Result<(), EscrowError> {
-    if amount <= 0 {
-        return Err(crate::EscrowError::AmountMustBePositive);
-    }
-    if amount > crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS {
-        return Err(crate::EscrowError::InvalidMilestoneAmount);
-    }
-    Ok(())
+// ── Concurrent-execution hardening (issue #1535) ─────────────────────────────
+//
+// The functions above validate *inputs* before a storage mutation starts.  The
+// section below validates the *persisted state* those mutations produce and
+// serialises mutation of a single contract so that re-entrant or interleaved
+// execution can never observe or leave behind a partially-applied state.
+//
+// Soroban runs one transaction at a time and rolls every storage write back when
+// a call panics, so a classic data race is impossible.  Two hazards remain:
+//
+// 1. **Re-entrancy** — a malicious settlement token can call back into the
+//    escrow while a `transfer` is in flight.  The mutation lock turns any such
+//    re-entrant mutation into a deterministic `ConcurrentMutation` failure
+//    instead of letting it operate on half-updated state.
+// 2. **Corrupt / stale state** — a persisted record that violates the accounting
+//    or milestone invariants would otherwise be read, mutated and written back,
+//    laundering the corruption into a record that looks valid.  The checked
+//    accessors refuse to load or store such a record.
+
+/// Ledgers a mutation-lock entry survives before the host evicts it.
+///
+/// One day (17 280 ledgers at ~5 s each).  The lock only ever lives for the
+/// duration of a single entrypoint call: the TTL exists purely so an entry
+/// orphaned by a host-level failure can never keep a contract permanently
+/// unusable, because the *presence* of the entry is what blocks mutation.
+///
+pub const MUTATION_LOCK_TTL_LEDGERS: u32 = crate::ttl::LEDGERS_PER_DAY;
+
+/// Storage key for the per-contract mutation lock.
+pub(crate) fn mutation_lock_key(contract_id: u32) -> DataKey {
+    DataKey::ContractMutationLock(contract_id)
 }
 
-// ── Internal tests ─────────────────────────────────────────────────────────────
-//
-// These tests exercise the module-internal logic using the Soroban test
-// harness. They complement the typed-error integration tests in
-// `test::storage_validation_compat` which exercise callers end-to-end.
+/// Returns `true` when a storage mutation for `contract_id` is in flight.
+pub(crate) fn is_contract_locked(env: &Env, contract_id: u32) -> bool {
+    env.storage().persistent().has(&mutation_lock_key(contract_id))
+}
+
+/// RAII guard holding the per-contract mutation lock.
+///
+/// The guard owns a clone of the [`Env`] so the lock is released in [`Drop`] on
+/// every exit path, including early returns.  A transaction that panics rolls
+/// its storage writes back, so a trapped call cannot leak the lock either.
+pub struct ContractMutationGuard {
+    env: Env,
+    contract_id: u32,
+}
+
+impl ContractMutationGuard {
+    /// Acquires the mutation lock for `contract_id`.
+    ///
+    /// # Panics
+    /// Panics with [`Error::ConcurrentMutation`] when the lock is already held,
+    /// which on Soroban means a re-entrant or interleaved call for the same
+    /// contract is already mutating state.
+    pub fn acquire(env: &Env, contract_id: u32) -> Self {
+        if is_contract_locked(env, contract_id) {
+            env.panic_with_error(Error::ConcurrentMutation);
+        }
+
+        let key = mutation_lock_key(contract_id);
+        env.storage().persistent().set(&key, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, MUTATION_LOCK_TTL_LEDGERS, MUTATION_LOCK_TTL_LEDGERS);
+
+        Self {
+            env: env.clone(),
+            contract_id,
+        }
+    }
+
+    /// The contract whose mutation this guard serialises.
+    pub fn contract_id(&self) -> u32 {
+        self.contract_id
+    }
+}
+
+/// Acquires the mutation lock for `contract_id` and returns the RAII guard.
+///
+/// Thin wrapper over [`ContractMutationGuard::acquire`] so entrypoints can bind
+/// the guard with `let _mutation_guard = ...;`.
+///
+/// # Panics
+/// Panics with [`Error::ConcurrentMutation`] when the lock is already held.
+pub(crate) fn acquire_contract_mutation_lock(
+    env: &Env,
+    contract_id: u32,
+) -> ContractMutationGuard {
+    ContractMutationGuard::acquire(env, contract_id)
+}
+
+impl Drop for ContractMutationGuard {
+    fn drop(&mut self) {
+        release_contract_mutation_lock(&self.env, self.contract_id);
+    }
+}
+
+/// Releases the mutation lock.
+///
+/// Idempotent: releasing an unlocked (or never locked) contract is a no-op, so
+/// a guard that runs after a rolled-back transaction is always safe.
+pub(crate) fn release_contract_mutation_lock(env: &Env, contract_id: u32) {
+    env.storage()
+        .persistent()
+        .remove(&mutation_lock_key(contract_id));
+}
+
+/// Validates the accounting invariants of a persisted [`Contract`].
+///
+/// # Invariants
+/// * `total_deposited`, `funded_amount`, `released_amount` and
+///   `refunded_amount` are all non-negative.
+/// * `released_amount + refunded_amount <= funded_amount` — a contract can never
+///   have paid out more than it took in.  The sum is checked, so a corrupted
+///   pair of maximum `i128`s fails here rather than overflowing.
+///
+/// # Panics
+/// Panics with [`Error::StorageInvariantViolated`] on a violated invariant and
+/// [`Error::PotentialOverflow`] when the sum cannot be represented.
+pub(crate) fn validate_contract_accounting(env: &Env, contract: &Contract) {
+    if contract.total_deposited < 0
+        || contract.funded_amount < 0
+        || contract.released_amount < 0
+        || contract.refunded_amount < 0
+    {
+        env.panic_with_error(Error::StorageInvariantViolated);
+    }
+
+    let settled = contract
+        .released_amount
+        .checked_add(contract.refunded_amount)
+        .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+
+    if settled > contract.funded_amount {
+        env.panic_with_error(Error::StorageInvariantViolated);
+    }
+}
+
+/// Validates the invariants of a persisted [`Milestone`].
+///
+/// # Invariants
+/// * `amount`, `funded_amount` and `refunded_amount` are all non-negative.
+/// * `released` and `refunded` are mutually exclusive — a milestone is settled by
+///   exactly one of the two flows.  This is the same rule
+///   [`crate::milestone_transitions::MilestoneState::from_milestone`] enforces.
+/// * A refunded milestone is refunded in full, so `refunded_amount == amount`.
+///
+/// # Panics
+/// Panics with [`Error::StorageInvariantViolated`] on a violated invariant.
+pub(crate) fn validate_milestone_consistency(env: &Env, milestone: &Milestone) {
+    if milestone.amount < 0 || milestone.funded_amount < 0 || milestone.refunded_amount < 0 {
+        env.panic_with_error(Error::StorageInvariantViolated);
+    }
+
+    if milestone.released && milestone.refunded {
+        env.panic_with_error(Error::StorageInvariantViolated);
+    }
+
+    if milestone.refunded && milestone.refunded_amount != milestone.amount {
+        env.panic_with_error(Error::StorageInvariantViolated);
+    }
+}
+
+/// Validates every milestone in a persisted vector.
+///
+/// # Panics
+/// Panics with [`Error::StorageInvariantViolated`] on the first milestone that
+/// violates an invariant.
+pub(crate) fn validate_milestones_consistency(env: &Env, milestones: &Vec<Milestone>) {
+    for milestone in milestones.iter() {
+        validate_milestone_consistency(env, &milestone);
+    }
+}
+
+/// Loads a contract and validates it before it can be mutated.
+///
+/// # Panics
+/// Panics with [`Error::ContractNotFound`] when the record is absent and with
+/// [`Error::StorageInvariantViolated`] when it is present but inconsistent.
+pub(crate) fn load_contract_checked(env: &Env, contract_id: u32) -> Contract {
+    let contract: Contract = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Contract(contract_id))
+        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+    validate_contract_accounting(env, &contract);
+    contract
+}
+
+/// Validates a contract and persists it, so an inconsistent record can never be
+/// written to storage.
+///
+/// # Panics
+/// Panics with [`Error::StorageInvariantViolated`] when `contract` violates an
+/// accounting invariant; storage is left untouched in that case.
+pub(crate) fn store_contract_checked(env: &Env, contract_id: u32, contract: &Contract) {
+    validate_contract_accounting(env, contract);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Contract(contract_id), contract);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,5 +808,309 @@ mod tests {
     fn validate_stroop_amount_rejects_i128_max() {
         let e = env();
         validate_stroop_amount(&e, i128::MAX);
+    }
+}
+
+/// Tests for the concurrent-execution hardening (issue #1535): the per-contract
+/// mutation lock plus the checked load/store accessors.
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use crate::types::{ContractStatus, ReleaseAuthorization};
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::Address;
+
+    /// A contract record satisfying every accounting invariant.
+    fn healthy_contract(env: &Env) -> Contract {
+        Contract {
+            client: Address::generate(env),
+            freelancer: Address::generate(env),
+            arbiter: None,
+            status: ContractStatus::Funded,
+            total_deposited: 1_000,
+            funded_amount: 1_000,
+            released_amount: 400,
+            refunded_amount: 100,
+            release_authorization: ReleaseAuthorization::ClientOnly,
+            reputation_issued: false,
+        }
+    }
+
+    /// An unreleased, unrefunded milestone.
+    fn pending_milestone() -> Milestone {
+        Milestone {
+            amount: 500,
+            funded_amount: 0,
+            released: false,
+            refunded: false,
+            work_evidence: None,
+            refunded_amount: 0,
+            deadline: None,
+        }
+    }
+
+    /// A registered escrow contract address, so storage handles are valid.
+    fn registered(env: &Env) -> Address {
+        env.register(crate::Escrow, ())
+    }
+
+    // ── mutation lock ────────────────────────────────────────────────────────
+
+    #[test]
+    fn lock_is_not_held_before_acquire() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            assert!(!is_contract_locked(&env, 7));
+        });
+    }
+
+    #[test]
+    fn guard_releases_lock_when_dropped() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            {
+                let guard = ContractMutationGuard::acquire(&env, 7);
+                assert_eq!(guard.contract_id(), 7);
+                assert!(is_contract_locked(&env, 7));
+            }
+            // Drop ran, so a later mutation can acquire the lock again.
+            assert!(!is_contract_locked(&env, 7));
+            let _second = ContractMutationGuard::acquire(&env, 7);
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn reentrant_acquire_is_rejected() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            let _first = ContractMutationGuard::acquire(&env, 7);
+            // Simulates a token callback re-entering the escrow mid-transfer.
+            let _reentrant = ContractMutationGuard::acquire(&env, 7);
+        });
+    }
+
+    #[test]
+    fn locks_are_scoped_per_contract() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            let _one = ContractMutationGuard::acquire(&env, 1);
+            // A different contract is not blocked by the first contract's lock.
+            let _two = ContractMutationGuard::acquire(&env, 2);
+            assert!(is_contract_locked(&env, 1));
+            assert!(is_contract_locked(&env, 2));
+        });
+    }
+
+    #[test]
+    fn release_is_idempotent() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            release_contract_mutation_lock(&env, 9);
+            release_contract_mutation_lock(&env, 9);
+            assert!(!is_contract_locked(&env, 9));
+        });
+    }
+
+    // ── contract accounting invariants ───────────────────────────────────────
+
+    #[test]
+    fn validate_contract_accounting_accepts_healthy() {
+        let env = Env::default();
+        validate_contract_accounting(&env, &healthy_contract(&env));
+    }
+
+    #[test]
+    fn validate_contract_accounting_accepts_fully_settled() {
+        let env = Env::default();
+        let mut contract = healthy_contract(&env);
+        contract.released_amount = 900;
+        contract.refunded_amount = 100;
+        validate_contract_accounting(&env, &contract);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_contract_accounting_rejects_oversettled() {
+        let env = Env::default();
+        let mut contract = healthy_contract(&env);
+        contract.funded_amount = 100;
+        contract.released_amount = 90;
+        contract.refunded_amount = 20;
+        validate_contract_accounting(&env, &contract);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_contract_accounting_rejects_negative_amount() {
+        let env = Env::default();
+        let mut contract = healthy_contract(&env);
+        contract.refunded_amount = -1;
+        validate_contract_accounting(&env, &contract);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_contract_accounting_rejects_overflowing_settlement() {
+        let env = Env::default();
+        let mut contract = healthy_contract(&env);
+        contract.funded_amount = i128::MAX;
+        contract.released_amount = i128::MAX;
+        contract.refunded_amount = i128::MAX;
+        validate_contract_accounting(&env, &contract);
+    }
+
+    // ── milestone invariants ─────────────────────────────────────────────────
+
+    #[test]
+    fn validate_milestone_consistency_accepts_pending() {
+        let env = Env::default();
+        validate_milestone_consistency(&env, &pending_milestone());
+    }
+
+    #[test]
+    fn validate_milestone_consistency_accepts_released() {
+        let env = Env::default();
+        let mut milestone = pending_milestone();
+        milestone.released = true;
+        milestone.funded_amount = milestone.amount;
+        validate_milestone_consistency(&env, &milestone);
+    }
+
+    #[test]
+    fn validate_milestone_consistency_accepts_refunded() {
+        let env = Env::default();
+        let mut milestone = pending_milestone();
+        milestone.refunded = true;
+        milestone.refunded_amount = milestone.amount;
+        validate_milestone_consistency(&env, &milestone);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_milestone_consistency_rejects_both_flags() {
+        let env = Env::default();
+        let mut milestone = pending_milestone();
+        milestone.released = true;
+        milestone.funded_amount = milestone.amount;
+        milestone.refunded = true;
+        milestone.refunded_amount = milestone.amount;
+        validate_milestone_consistency(&env, &milestone);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_milestone_consistency_rejects_partial_refund() {
+        let env = Env::default();
+        let mut milestone = pending_milestone();
+        milestone.refunded = true;
+        milestone.refunded_amount = milestone.amount - 1;
+        validate_milestone_consistency(&env, &milestone);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_milestone_consistency_rejects_negative_amount() {
+        let env = Env::default();
+        let mut milestone = pending_milestone();
+        milestone.amount = -1;
+        validate_milestone_consistency(&env, &milestone);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_milestones_consistency_rejects_any_bad_entry() {
+        let env = Env::default();
+        let mut milestones = Vec::new(&env);
+        milestones.push_back(pending_milestone());
+        let mut corrupt = pending_milestone();
+        corrupt.released = true;
+        corrupt.funded_amount = corrupt.amount;
+        corrupt.refunded = true;
+        corrupt.refunded_amount = corrupt.amount;
+        milestones.push_back(corrupt);
+        validate_milestones_consistency(&env, &milestones);
+    }
+
+    #[test]
+    fn validate_milestones_consistency_accepts_healthy_vector() {
+        let env = Env::default();
+        let mut milestones = Vec::new(&env);
+        milestones.push_back(pending_milestone());
+        let mut released = pending_milestone();
+        released.released = true;
+        released.funded_amount = released.amount;
+        milestones.push_back(released);
+        validate_milestones_consistency(&env, &milestones);
+    }
+
+    // ── checked accessors ────────────────────────────────────────────────────
+
+    #[test]
+    fn load_contract_checked_accepts_healthy() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(7), &healthy_contract(&env));
+            let loaded = load_contract_checked(&env, 7);
+            assert_eq!(loaded.funded_amount, 1_000);
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn load_contract_checked_rejects_corrupt_record() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            let mut corrupt = healthy_contract(&env);
+            corrupt.funded_amount = 10;
+            corrupt.released_amount = 1_000;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(7), &corrupt);
+            let _ = load_contract_checked(&env, 7);
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn load_contract_checked_rejects_absent_record() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            let _ = load_contract_checked(&env, 7);
+        });
+    }
+
+    #[test]
+    fn store_contract_checked_persists_healthy_record() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            store_contract_checked(&env, 7, &healthy_contract(&env));
+            assert!(env.storage().persistent().has(&DataKey::Contract(7)));
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn store_contract_checked_rejects_corrupt_record() {
+        let env = Env::default();
+        let id = registered(&env);
+        env.as_contract(&id, || {
+            let mut corrupt = healthy_contract(&env);
+            corrupt.refunded_amount = corrupt.funded_amount + 1;
+            // Validation runs before the write, so the panic must happen and the
+            // corrupt record must never reach storage.
+            store_contract_checked(&env, 7, &corrupt);
+        });
     }
 }
