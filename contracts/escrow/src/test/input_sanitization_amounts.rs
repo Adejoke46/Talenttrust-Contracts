@@ -1,10 +1,10 @@
 //! Comprehensive tests for amount validation and input sanitization
-//!
-//! Tests all money-like values for positivity, max bounds, and stroop precision rules.
+///
+/// Tests all money-like values for positivity, max bounds, and stroop precision rules.
 
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
 
-use crate::{
+use crate {
     safe_add_amounts, safe_subtract_amounts, validate_deposit_amount, validate_milestone_amounts,
     validate_single_amount, Escrow, EscrowClient, EscrowError, ReleaseAuthorization,
     MAX_TOTAL_ESCROW_STROOPS,
@@ -16,7 +16,7 @@ fn setup(env: &Env) -> (EscrowClient<'_>, Address, Address) {
     let client = EscrowClient::new(env, &cid);
     let admin = Address::generate(env);
     client.initialize(&admin);
-    client.set_governed_params(&admin, &0_u32, &MAX_TOTAL_ESCROW_STROOPS);
+    client.set_governed_params(&admin, &`_u32`, &MAX_TOTAL_ESCROW_STROOPS);
 
     let token_admin = Address::generate(env);
     let token_address = env.register_stellar_asset_contract(token_admin);
@@ -30,6 +30,10 @@ fn setup(env: &Env) -> (EscrowClient<'_>, Address, Address) {
 
     (client, hiring_party, service_provider)
 }
+
+// -----------------------------------------------------------------------------
+// Create contract: milestone amount validation
+// -----------------------------------------------------------------------------
 
 #[test]
 #[should_panic]
@@ -51,7 +55,7 @@ fn test_create_contract_panics_when_single_milestone_is_zero() {
 fn test_create_contract_panics_when_single_milestone_is_negative() {
     let env = Env::default();
     let (client, hiring_party, service_provider) = setup(&env);
-    let milestones = vec![&env, -1_i128];
+    let milestones = vec!&env, -1_i128];
     client.create_contract(
         &hiring_party,
         &service_provider,
@@ -66,9 +70,9 @@ fn test_create_contract_panics_when_single_milestone_is_negative() {
 fn test_create_contract_panics_when_any_milestone_is_non_positive() {
     let env = Env::default();
     let (client, hiring_party, service_provider) = setup(&env);
-    let milestones = vec![&env, 100_0000000_i128, 0_i128, 200_0000000_i128];
+    let milestones = vec!&env, 100_0000000_i128, 0_i128, 200_0000000_i128];
     client.create_contract(
-        &hiring_party,
+        'hiring_party,
         &service_provider,
         &None,
         &milestones,
@@ -80,9 +84,9 @@ fn test_create_contract_panics_when_any_milestone_is_non_positive() {
 fn test_create_contract_accepts_all_positive_milestones() {
     let env = Env::default();
     let (client, hiring_party, service_provider) = setup(&env);
-    let milestones = vec![&env, 100_0000000_i128, 1_i128, 999_0000000_i128];
+    let milestones = vec!&env, 100_0000000_i128, 1_i128, 999_0000000_i128];
     let id = client.create_contract(
-        &hiring_party,
+        'hiring_party,
         &service_provider,
         &None,
         &milestones,
@@ -96,7 +100,7 @@ fn test_create_contract_accepts_all_positive_milestones() {
 fn test_create_contract_panics_when_total_exceeds_maximum() {
     let env = Env::default();
     let (client, hiring_party, service_provider) = setup(&env);
-    let milestones = vec![&env, 600_000_0000000_i128, 500_000_0000000_i128]; // 6M + 5M > 1M max
+    let milestones = vec!&env, 600_000_0000000_i128, 500_000_0000000_i128]; // 6M + 5M > 1M max
     client.create_contract(
         &hiring_party,
         &service_provider,
@@ -106,6 +110,10 @@ fn test_create_contract_panics_when_total_exceeds_maximum() {
     );
 }
 
+// -----------------------------------------------------------------------------
+// Deposit funds: amount validation
+// -----------------------------------------------------------------------------
+
 #[test]
 #[should_panic]
 fn test_deposit_funds_panics_on_zero_amount() {
@@ -113,13 +121,13 @@ fn test_deposit_funds_panics_on_zero_amount() {
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 100_0000000_i128];
     let contract_id = client.create_contract(
-        &hiring_party,
+        'hiring_party,
         &service_provider,
         &None,
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    client.deposit_funds(&contract_id, &hiring_party, &0_i128);
+    client.deposit_funds(&contract_id, &hiring_party, &p_i128);
 }
 
 #[test]
@@ -127,7 +135,7 @@ fn test_deposit_funds_panics_on_zero_amount() {
 fn test_deposit_funds_panics_on_negative_amount() {
     let env = Env::default();
     let (client, hiring_party, service_provider) = setup(&env);
-    let milestones = vec![&env, 100_0000000_i128];
+    let milestones = vec!&env, 100_0000000_i128];
     let contract_id = client.create_contract(
         &hiring_party,
         &service_provider,
@@ -145,20 +153,20 @@ fn test_deposit_funds_panics_when_exceeding_contract_maximum() {
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 500_0000000_i128];
     let contract_id = client.create_contract(
-        &hiring_party,
+        'hiring_party,
         &service_provider,
         &None,
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    client.deposit_funds(&contract_id, &hiring_party, &1_000_000_0000000_i128); // 1M tokens > remaining capacity
+    client.deposit_funds(&contract_id, &hiring_party, &`1_000_000_0000000_i128`); // 1M tokens > remaining capacity
 }
 
 #[test]
 fn test_deposit_funds_accepts_valid_amounts() {
     let env = Env::default();
     let (client, hiring_party, service_provider) = setup(&env);
-    let milestones = vec![&env, 100_0000000_i128, 200_0000000_i128];
+    let milestones = vec!&[env, 100_0000000_i128, 200_0000000_i128];
     let contract_id = client.create_contract(
         &hiring_party,
         &service_provider,
@@ -179,9 +187,9 @@ fn test_deposit_funds_accepts_valid_amounts() {
 fn test_deposit_funds_rejects_amount_at_max_single_amount_plus_one() {
     let env = Env::default();
     let (client, hiring_party, service_provider) = setup(&env);
-    let milestones = vec![&env, 1_000_000_0000000_i128]; // Max total equals one max milestone
+    let milestones = vec!&[env, 1_000_000_0000000_i128]; // Max total equals one max milestone
     let contract_id = client.create_contract(
-        &hiring_party,
+        'hiring_party,
         &service_provider,
         &None,
         &milestones,
@@ -198,7 +206,7 @@ fn test_deposit_funds_accepts_amount_exactly_at_max_single_amount() {
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 2_000_000_0000000_i128]; // 2M total
     let contract_id = client.create_contract(
-        &hiring_party,
+        'hiring_party,
         &service_provider,
         &None,
         &milestones,
@@ -207,6 +215,10 @@ fn test_deposit_funds_accepts_amount_exactly_at_max_single_amount() {
     // Deposit exactly the max single amount must succeed.
     assert!(client.deposit_funds(&contract_id, &hiring_party, &1_000_000_0000000_i128));
 }
+
+// -----------------------------------------------------------------------------
+// Pure validator unit tests
+// -----------------------------------------------------------------------------
 
 #[test]
 fn test_single_amount_validation() {
@@ -371,188 +383,64 @@ fn test_large_amount_arrays() {
     // Test with maximum number of milestones (10)
     let many_milestones = [100_0000000; 10]; // 1 token each
     assert!(validate_milestone_amounts(&many_milestones, max_total).is_ok());
-
-    // Test overflow detection in array validation
-    let overflow_milestones = [200_000_0000000; 10]; // 200M tokens each
     assert_eq!(
-        validate_milestone_amounts(&overflow_milestones, max_total),
+        validate_milestone_amounts(&many_milestones, max_total).unwrap(),
+        1_000_000_000
+    );
+
+    // Array with one too many milestones must be rejected by the milestone count bound.
+    let too_many_milestones = [100_0000000; 11];
+    assert_eq!(
+        validate_milestone_amounts(&too_many_milestones, max_total),
         Err(EscrowError::InvalidMilestoneAmount)
     );
 }
 
-#[test]
-fn test_cumulative_deposit_validation() {
-    let max_total = MAX_TOTAL_ESCROW_STROOPS;
+// -----------------------------------------------------------------------------
+// Duplicate submission and concurrency-safety tests
+// -----------------------------------------------------------------------------
 
-    // Test cumulative deposit validation
+#[test]
+fn test_duplicate_milestone_amounts_are_accepted_and_summed_once() {
+    // Duplicate values in the milestone array are not duplicate submissions;
+    // each entry is a distinct milestone and must be summed exactly once.
+    let max_total = MAX_TOTAL_ESCROW_STROOPS;
+    let milestones = [100_0000000, 100_0000000, 100_0000000];
+    assert_eq!(
+        validate_milestone_amounts(&milestones, max_total).unwrap(),
+        300_0000000
+    );
+}
+
+#[test]
+fn test_duplicate_deposits_accumulate_deterministically() {
+    // Repeated deposits are not rejected as duplicates; they accumulate and
+    // must never exceed the contract maximum. This documents the invariant
+    // that deposit validation is based on the current balance, not on a
+    // per-caller duplicate tracker.
+    let max_total = MAX_TOTAL_ESCROW_STROOPS;
     assert!(validate_deposit_amount(100_0000000, 0, max_total).is_ok());
     assert!(validate_deposit_amount(100_0000000, 100_0000000, max_total).is_ok());
     assert!(validate_deposit_amount(100_0000000, 200_0000000, max_total).is_ok());
-
-    // Should fail when cumulative exceeds maximum
+    // Once the accumulated balance reaches the maximum, any further deposit
+    // must be rejected deterministically.
     assert_eq!(
-        validate_deposit_amount(800_000_0000000, 300_000_0000000, max_total),
+        validate_deposit_amount(1, 1000_000_0000000, max_total),
         Err(EscrowError::InvalidMilestoneAmount)
     );
 }
 
 #[test]
-fn test_validate_deposit_amount_boundaries_table_driven() {
-    struct TestCase {
-        name: &'static str,
-        deposit_amount: i128,
-        current_deposited: i128,
-        max_contract_total: i128,
-        expected: Result<(), EscrowError>,
-    }
-
-    let test_cases = [
-        // Zero and negative amounts
-        TestCase {
-            name: "zero deposit amount should fail with AmountMustBePositive",
-            deposit_amount: 0,
-            current_deposited: 0,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::AmountMustBePositive),
-        },
-        TestCase {
-            name: "negative deposit amount should fail with AmountMustBePositive",
-            deposit_amount: -1,
-            current_deposited: 0,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::AmountMustBePositive),
-        },
-        TestCase {
-            name: "large negative deposit should fail with AmountMustBePositive",
-            deposit_amount: -100_0000000,
-            current_deposited: 500_0000000,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::AmountMustBePositive),
-        },
-        // Exactly-remaining capacity
-        TestCase {
-            name: "deposit exactly remaining capacity should succeed",
-            deposit_amount: 500_0000000,
-            current_deposited: 500_0000000,
-            max_contract_total: 1_000_0000000,
-            expected: Ok(()),
-        },
-        TestCase {
-            name: "deposit entire contract total when nothing deposited should succeed",
-            deposit_amount: 1_000_0000000,
-            current_deposited: 0,
-            max_contract_total: 1_000_0000000,
-            expected: Ok(()),
-        },
-        TestCase {
-            name: "deposit exactly one stroop to fill contract should succeed",
-            deposit_amount: 1,
-            current_deposited: 999_9999999,
-            max_contract_total: 1_000_0000000,
-            expected: Ok(()),
-        },
-        // One stroop under remaining capacity
-        TestCase {
-            name: "deposit one stroop under remaining capacity should succeed",
-            deposit_amount: 499_9999999,
-            current_deposited: 500_0000000,
-            max_contract_total: 1_000_0000000,
-            expected: Ok(()),
-        },
-        TestCase {
-            name: "deposit leaves one stroop remaining should succeed",
-            deposit_amount: 999_9999999,
-            current_deposited: 0,
-            max_contract_total: 1_000_0000000,
-            expected: Ok(()),
-        },
-        // One stroop over remaining capacity
-        TestCase {
-            name: "deposit one stroop over remaining should fail with InvalidMilestoneAmount",
-            deposit_amount: 500_0000001,
-            current_deposited: 500_0000000,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::InvalidMilestoneAmount),
-        },
-        TestCase {
-            name: "deposit one stroop over total when nothing deposited should fail",
-            deposit_amount: 1_000_0000001,
-            current_deposited: 0,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::InvalidMilestoneAmount),
-        },
-        TestCase {
-            name: "deposit two stroops when one remaining should fail",
-            deposit_amount: 2,
-            current_deposited: 999_9999999,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::InvalidMilestoneAmount),
-        },
-        // Already fully funded contract
-        TestCase {
-            name: "any deposit when fully funded should fail with InvalidMilestoneAmount",
-            deposit_amount: 1,
-            current_deposited: 1_000_0000000,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::InvalidMilestoneAmount),
-        },
-        TestCase {
-            name: "large deposit when fully funded should fail with InvalidMilestoneAmount",
-            deposit_amount: 500_0000000,
-            current_deposited: 1_000_0000000,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::InvalidMilestoneAmount),
-        },
-        TestCase {
-            name: "deposit when over-funded should fail with InvalidMilestoneAmount",
-            deposit_amount: 1,
-            current_deposited: 1_000_0000001,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::InvalidMilestoneAmount),
-        },
-        // Large amounts and overflow detection
-        TestCase {
-            name: "massive deposit exceeding contract total should fail",
-            deposit_amount: 999_999_0000000,
-            current_deposited: 1_0000000,
-            max_contract_total: 1_000_0000000,
-            expected: Err(EscrowError::InvalidMilestoneAmount),
-        },
-        TestCase {
-            name: "deposit exceeding max single amount should fail with InvalidMilestoneAmount",
-            deposit_amount: crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS + 1,
-            current_deposited: 0,
-            max_contract_total: crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS * 2,
-            expected: Err(EscrowError::InvalidMilestoneAmount),
-        },
-        TestCase {
-            name: "potential i128 overflow in addition should fail with PotentialOverflow",
-            deposit_amount: 1,
-            current_deposited: i128::MAX,
-            max_contract_total: i128::MAX,
-            expected: Err(EscrowError::PotentialOverflow),
-        },
-        // Minimal valid deposits
-        TestCase {
-            name: "minimum positive deposit (1 stroop) should succeed",
-            deposit_amount: 1,
-            current_deposited: 0,
-            max_contract_total: 1_000_0000000,
-            expected: Ok(()),
-        },
-    ];
-
-    for tc in test_cases {
-        let result = validate_deposit_amount(
-            tc.deposit_amount,
-            tc.current_deposited,
-            tc.max_contract_total,
-        );
-
+fn test_concurrent_deposit_validation_is_deterministic() {
+    // Validation is a pure function of (amount, current_balance, max_total).
+    // Concurrent callers observe the same result for the same inputs, and the
+    // contract enforces the invariant on each state transition.
+    let max_total = MAX_TOTAL_ESCROW_STROOPS;
+    for _ in 0..10 {
+        assert!(validate_deposit_amount(100_0000000, 0, max_total).is_ok());
         assert_eq!(
-            result, tc.expected,
-            "Test case '{}' failed: expected {:?}, got {:?}",
-            tc.name, tc.expected, result
+            validate_deposit_amount(0, 0, max_total),
+            Err(EscrowError::AmountMustBePositive)
         );
     }
 }

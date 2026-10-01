@@ -516,7 +516,7 @@ fn indexer_iteration_pattern_with_contract_exists_and_next_id() {
     assert_eq!(next_id, 5);
 
     // Collect all existing ids via the safe probe.
-    let mut found: Vec<u32> = Vec::new(&env);
+    let mut found: soroban_sdk::Vec<u32> = soroban_sdk::Vec::new(&env);
     for id in 1..next_id {
         if escrow.contract_exists(id) {
             found.push_back(id);
@@ -525,9 +525,9 @@ fn indexer_iteration_pattern_with_contract_exists_and_next_id() {
 
     // Only ids 1, 2, 3 should be found; id 4 is a gap.
     assert_eq!(found.len(), 3);
-    assert_eq!(found.get(0), Some(&1));
-    assert_eq!(found.get(1), Some(&2));
-    assert_eq!(found.get(2), Some(&3));
+    assert_eq!(found.get(0), Some(1));
+    assert_eq!(found.get(1), Some(2));
+    assert_eq!(found.get(2), Some(3));
 }
 
 /// `contract_exists` is a read-only probe and must not extend the contract TTL.

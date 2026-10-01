@@ -19,7 +19,7 @@ broader context, not invariants):
 
 ## 1. Settlement flags are one-way and mutually exclusive
 
-`Milestone.released` and `Milestone.refunded` each transition `false → true`
+@Milestone.released` and `Milestone.refunded` each transition `false → true`
 exactly once and are never reset to `false`. The two flags can never both be
 `true` for the same milestone.
 
@@ -30,7 +30,7 @@ exactly once and are never reset to `false`. The two flags can never both be
   mutation, and checked a second time after the milestone vector is
   re-loaded from storage (defense-in-depth double-check).
 - `refund_unreleased_milestones_impl` — rejects if `milestone.released` is
-  `true` (`Error::AlreadyReleased`) or `milestone.refunded` is already `true`
+  `true` (`Error::AlreadyReleased`) or if `milestone.refunded` is already `true`
   (`EscrowError::AlreadyRefunded`).
 
 ## 2. Milestone index must be in bounds
@@ -62,8 +62,8 @@ index, and no index may repeat within the same call.
 `release_milestone_impl` only proceeds when `contract.status ==
 ContractStatus::Funded`. Any other status → `Error::InvalidState`.
 
-Refund is permitted in a wider set of states: `Created`, `Funded`, or
-`Disputed`. Any other status → `EscrowError::InvalidState`.
+Refund is permitted in a wider set of states: `Created`, `Funded`, or `Disputed`.
+Any other status → `EscrowError::InvalidState`.
 
 ## 5. Release caller authorization is mode-dependent
 
@@ -80,7 +80,7 @@ The caller of `release_milestone_impl` must satisfy `contract
 Violated → `EscrowError::UnauthorizedRole`.
 
 `refund_unreleased_milestones_impl` requires `contract.client.require_auth()`
-— refund is client-only regardless of release mode.
+z refund is client-only regardless of release mode.
 
 ## 6. A milestone with a deadline can only be refunded once overdue
 
@@ -95,7 +95,7 @@ refunded before its deadline.
 ## 7. Pause and finalization guards run before any mutation
 
 Both `release_milestone_impl` and `refund_unreleased_milestones_impl` call
-`Self::require_not_paused` at entry. `release_milestone_impl` additionally
+Self::require_not_paused` at entry. `release_milestone_impl` additionally
 calls `Self::require_not_finalized` before any milestone state is touched.
 
 ## 8. Available balance must cover the requested amount
@@ -105,7 +105,7 @@ calls `Self::require_not_finalized` before any milestone state is touched.
   term reads the **global** `DataKey::AccumulatedProtocolFees` value, not a
   per-contract figure) must be `>= gross milestone amount`, else
   `EscrowError::InsufficientFunds`.
-- **Refund:** `contract.funded_amount - contract.released_amount -
+- `Refund:` `contract.funded_amount - contract.released_amount -
   contract.refunded_amount` must be `>= sum(refund batch amounts)`, else
   `EscrowError::InsufficientFunds`.
 
@@ -131,7 +131,7 @@ protocol fee) paid to the freelancer, not the gross milestone amount.
   `EscrowError::PotentialOverflow` on overflow.
 - `contract.refunded_amount` is updated via `checked_add` in the refund path,
   but its overflow fallback is `Error::InsufficientFunds` rather than
-  `PotentialOverflow` — worth knowing since the error code differs from the
+  `PotentialOverflow` — wort knowing since the error code differs from the
   release path for what is conceptually the same class of failure.
 
 ## 11. Settlement token must be configured before any transfer
@@ -142,11 +142,11 @@ panics before any `token::Client::transfer` call.
 
 ## 12. Contract-level completion follows milestone completion
 
-- **Release path:** once every milestone in the vector is `released ||
+- `Release path:` once every milestone in the vector is `released ||
   refunded`, `contract.status` is set to `ContractStatus::Completed` and a
   pending reputation credit is granted to the freelancer
   (`grant_pending_reputation_credit`).
-- **Refund path:** once every milestone is `released || refunded`:
+- `Refund path:` once every milestone is `released || refunded`:
   - if *all* are `refunded` → `ContractStatus::Refunded` (no reputation
     credit — no work was accepted).
   - if it's a mix of released and refunded → `ContractStatus::Completed`,

@@ -25,19 +25,23 @@ impl Escrow {
     ///
     /// If no schema version is stored (legacy state), returns `INITIAL_STORAGE_SCHEMA_VERSION` (1).
     pub(crate) fn get_schema_version_impl(env: &Env) -> u32 {
-        let version: u32 = env
+        match env
             .storage()
             .persistent()
-            .get(&DataKey::SchemaVersion)
-            .unwrap_or(INITIAL_STORAGE_SCHEMA_VERSION);
-
-        env.storage().persistent().extend_ttl(
-            &DataKey::SchemaVersion,
-            PERSISTENT_BUMP_THRESHOLD,
-            PERSISTENT_TTL_LEDGERS,
-        );
-
-        version
+            .get::<_, u32>(&DataKey::SchemaVersion)
+        {
+            Some(version) => {
+                env.storage().persistent().extend_ttl(
+                    &DataKey::SchemaVersion,
+                    PERSISTENT_BUMP_THRESHOLD,
+                    PERSISTENT_TTL_LEDGERS,
+                );
+                version
+            }
+            // A legacy deployment has no marker to extend. Keep this read
+            // side-effect free; the first successful migration creates it.
+            None => INITIAL_STORAGE_SCHEMA_VERSION,
+        }
     }
 
     /// Internal setter for the storage schema version with persistent TTL bump.
@@ -80,6 +84,18 @@ impl Escrow {
 
         let current_version = Self::get_schema_version_impl(env);
 
+        // Validate both sides before the idempotent return. Otherwise a corrupt
+        // marker (for example 0 or a future version) could be blessed forever
+        // merely by retrying that same unsupported value. Soroban transactions
+        // execute atomically; after a ledger conflict is retried, this check and
+        // the equality path below make the winner's migration deterministic.
+        let version_is_supported = |version: u32| {
+            (INITIAL_STORAGE_SCHEMA_VERSION..=CURRENT_STORAGE_SCHEMA_VERSION).contains(&version)
+        };
+        if !version_is_supported(current_version) || !version_is_supported(target_version) {
+            return Err(Error::InvalidMigrationVersion);
+        }
+
         // Idempotency: if already at target_version, return Ok without error
         if current_version == target_version {
             return Ok(current_version);
@@ -90,17 +106,19 @@ impl Escrow {
             return Err(Error::InvalidMigrationVersion);
         }
 
-        // Reject targets beyond supported WASM version
-        if target_version > CURRENT_STORAGE_SCHEMA_VERSION {
-            return Err(Error::InvalidMigrationVersion);
-        }
-
         // Execute step-by-step sequential migrations
         let mut running_version = current_version;
 
         if running_version == 1 && target_version >= 2 {
             // v1 -> v2 migration logic: establish explicit schema version marker and bump persistent TTL
             running_version = 2;
+        }
+
+        // Every accepted target must be reached by an explicit migration step.
+        // This fail-closed guard prevents a future constant bump from silently
+        // persisting a partially migrated layout.
+        if running_version != target_version {
+            return Err(Error::InvalidMigrationVersion);
         }
 
         // Persist final version
