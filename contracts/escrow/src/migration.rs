@@ -220,4 +220,5 @@ impl Escrow {
 }
 
 #[cfg(test)]
+#[path = "migration_test.rs"]
 mod migration_test;

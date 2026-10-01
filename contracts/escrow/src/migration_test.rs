@@ -95,12 +95,16 @@ fn advance_past_ttl(env: &Env) {
 
 /// Assert that a `try_*` call surfaces the expected `EscrowError` variant.
 ///
-/// Soroban's generated `try_*` methods return:
-///   `Result<Result<T, soroban_sdk::Error>, soroban_sdk::InvokeError>`
-///
-/// A `panic_with_error` inside the contract surfaces as `Err(Ok(soroban_sdk::Error))`.
-fn assert_error<T: core::fmt::Debug, E: Into<soroban_sdk::Error> + core::fmt::Debug>(
-    result: Result<Result<T, soroban_sdk::Error>, soroban_sdk::InvokeError>,
+/// Matches the canonical `assert_contract_error` pattern from `test/mod.rs`.
+/// Soroban `try_*` methods return:
+///   `Result<Result<T, InnerError>, Result<soroban_sdk::Error, soroban_sdk::InvokeError>>`
+/// A `panic_with_error` surfaces as `Err(Ok(soroban_sdk::Error))`.
+fn assert_error<
+    T: core::fmt::Debug,
+    InnerError: core::fmt::Debug,
+    E: Into<soroban_sdk::Error> + core::fmt::Debug,
+>(
+    result: Result<Result<T, InnerError>, Result<soroban_sdk::Error, soroban_sdk::InvokeError>>,
     expected: E,
 ) {
     match result {
