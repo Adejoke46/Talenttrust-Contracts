@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Overflow and saturation tests for settlement arithmetic (#895).
 //!
 //! Covers all arithmetic hot-paths in dispute resolution payouts and fund
@@ -20,7 +21,6 @@
 //! - Subtraction near zero: boundary at 0 and below
 //! - Conservation invariant: payout sums always equal available at extremes
 
-#![cfg(test)]
 
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
 
@@ -29,7 +29,6 @@ use crate::{
     Contract, ContractStatus, DisputeResolution, DisputeSplit, Error, EscrowError,
     ReleaseAuthorization, MAX_SINGLE_AMOUNT_STROOPS,
 };
-
 use super::{assert_contract_error, EscrowFixture};
 
 // ── Shared helpers ────────────────────────────────────────────────────────────

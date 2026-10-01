@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::total_milestone_amount;
+use super::{default_milestones, EscrowClient};
 use crate::{Escrow, ReleaseAuthorization};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::testutils::Events;
@@ -19,7 +20,7 @@ fn mint_to(env: &Env, sac: &Address, holder: &Address, amount: i128) {
 fn setup_bound(env: &Env) -> (super::EscrowClient<'_>, Address, Address) {
     env.ledger().set_timestamp(1000);
     let id = env.register(Escrow, ());
-    let escrow = super::EscrowClient::new(env, &id);
+    let escrow = EscrowClient::new(env, &id);
     let admin = Address::generate(env);
     let sac = env.register_stellar_asset_contract(admin.clone());
     env.mock_all_auths_allowing_non_root_auth();
@@ -32,7 +33,7 @@ fn setup_funded_contract(env: &Env) -> (Address, Address, u32) {
     let (escrow, sac, _) = setup_bound(env);
     let client_addr = Address::generate(env);
     let freelancer_addr = Address::generate(env);
-    let milestones = super::default_milestones(env);
+    let milestones = default_milestones(env);
     let contract_id = escrow.create_contract(
         &client_addr,
         &freelancer_addr,
@@ -50,7 +51,7 @@ fn setup_completed_contract(env: &Env) -> (super::EscrowClient<'_>, Address, Add
     let (escrow, sac, _) = setup_bound(env);
     let client_addr = Address::generate(env);
     let freelancer_addr = Address::generate(env);
-    let milestones = super::default_milestones(env);
+    let milestones = default_milestones(env);
     let contract_id = escrow.create_contract(
         &client_addr,
         &freelancer_addr,
@@ -102,7 +103,7 @@ fn deposit_emits_deposit_event_with_correct_topic() {
     let env = Env::default();
     let (escrow, sac, _) = setup_bound(&env);
     let client_addr = Address::generate(&env);
-    let milestones = super::default_milestones(&env);
+    let milestones = default_milestones(&env);
     let contract_id = escrow.create_contract(
         &client_addr,
         &Address::generate(&env),
@@ -126,7 +127,7 @@ fn deposit_event_contains_contract_id_in_topics() {
     let env = Env::default();
     let (escrow, sac, _) = setup_bound(&env);
     let client_addr = Address::generate(&env);
-    let milestones = super::default_milestones(&env);
+    let milestones = default_milestones(&env);
     let contract_id = escrow.create_contract(
         &client_addr,
         &Address::generate(&env),
@@ -159,7 +160,7 @@ fn deposit_event_payload_contains_amount_caller_timestamp() {
     let env = Env::default();
     let (escrow, sac, _) = setup_bound(&env);
     let client_addr = Address::generate(&env);
-    let milestones = super::default_milestones(&env);
+    let milestones = default_milestones(&env);
     let contract_id = escrow.create_contract(
         &client_addr,
         &Address::generate(&env),
@@ -193,7 +194,7 @@ fn deposit_event_not_emitted_for_zero_deposit() {
     let env = Env::default();
     let (escrow, _, _) = setup_bound(&env);
     let client_addr = Address::generate(&env);
-    let milestones = super::default_milestones(&env);
+    let milestones = default_milestones(&env);
     let contract_id = escrow.create_contract(
         &client_addr,
         &Address::generate(&env),

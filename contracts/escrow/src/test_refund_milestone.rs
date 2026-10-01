@@ -1,4 +1,5 @@
 //! # Milestone-level partial refund tests
+//! # Milestone-level partial refund tests
 //!
 //! Covers `refund_milestone` and `get_refundable_balance`, verifying:
 //! - Partial refunds (one or more milestones)
@@ -7,6 +8,7 @@
 //! - Accounting invariant: `total_deposited == released + refunded + available`
 //! - All error paths (empty request, duplicate, already-released, already-refunded,
 //!   insufficient balance)
+//! - State invariants: status transitions, milestone flags, and balance consistency
 
 #![cfg(test)]
 
@@ -408,3 +410,4 @@ fn single_milestone_contract_reaches_refunded_status() {
     assert_eq!(record.refunded_amount, 500_0000000_i128);
     assert_eq!(client.get_refundable_balance(&cid), 0);
 }
+ 
