@@ -1,4 +1,5 @@
 //! Bounds validation for storage entrypoint inputs.
+//! Bounds validation for storage entrypoint inputs.
 //!
 //! This module extracts numeric and length bound checks for storage-mutating
 //! entrypoints into a single source of truth. Each function validates one
@@ -41,12 +42,14 @@
 //! - Upgrades are safe: adding a new validated field to an entrypoint requires
 //!   adding a new `validate_*` call and a corresponding `compat` test.
 
+use crate::milestones_consts::MAX_SINGLE_AMOUNT_STROOPS;
 use crate::milestones_consts::{
     MAX_FEE_BPS, MAX_MILESTONES, MAX_RATING, MAX_REPUTATION_CONFIG_COMMENT_BYTES_CEILING,
     MAX_REPUTATION_CONFIG_RATING_CEILING, MIN_COMMENT_BYTES, MIN_RATING,
 };
 use crate::{Error, EscrowError};
 use soroban_sdk::Env;
+use soroban_sdk::panic_with_error;
 
 // ── validate_escrow_total_cap ────────────────────────────────────────────────
 
@@ -77,6 +80,9 @@ use soroban_sdk::Env;
 /// Panics with [`Error::InvalidProtocolParameters`] when `max_escrow_total_stroops <= 0`.
 pub(crate) fn validate_escrow_total_cap(env: &Env, max_escrow_total_stroops: i128) {
     if max_escrow_total_stroops <= 0 {
+        env.panic_with_error(Error::InvalidProtocolParameters);
+    }
+    if max_escrow_total_stroops > MAX_SINGLE_AMOUNT_STROOPS {
         env.panic_with_error(Error::InvalidProtocolParameters);
     }
 }
@@ -112,8 +118,20 @@ pub(crate) fn validate_escrow_total_cap(env: &Env, max_escrow_total_stroops: i12
 /// the range and may reject previously accepted stored configurations on their
 /// next update — treat as a breaking change.
 ///
+/// # Boundary behavior
+/// * `min_rating == max_rating` is accepted (single-value range).
+/// * `max_comment_bytes == 1` and `max_comment_bytes == 1_000` are accepted.
+/// * `min_rating == 0`, `max_rating < min_rating`, `max_rating > 10`,
+///   `max_comment_bytes == 0`, and `max_comment_bytes > 1_000` are rejected.
+///
 /// # Panics
 /// Panics with [`Error::InvalidProtocolParameters`] when any bound is violated.
+///
+/// # Invariants
+/// * `MIN_RATING <= min_rating <= max_rating <= MAX_REPUTATION_CONFIG_RATING_CEILING`,
+///   so the accepted rating window is never empty and never exceeds the
+///   protocol ceiling.
+/// * `MIN_COMMENT_BYTES <= max_comment_bytes <= MAX_REPUTATION_CONFIG_COMMENT_BYTES_CEILING`.
 pub(crate) fn validate_reputation_config_params(
     env: &Env,
     min_rating: u32,
@@ -159,6 +177,10 @@ pub(crate) fn validate_reputation_config_params(
 /// contracts but affects gas / transaction-size budgets. Decreasing it would
 /// reject contracts that are valid today. Either direction requires a governance
 /// proposal, a `get_bounds()` update, and a corresponding compat test update.
+///
+/// # Boundary behavior
+/// * `1` and `MAX_MILESTONES` are accepted.
+/// * `0`, `MAX_MILESTONES + 1`, and `u32::MAX` are rejected.
 ///
 /// # Panics
 /// * [`EscrowError::EmptyMilestones`] when `count == 0`.
@@ -206,8 +228,16 @@ pub(crate) fn validate_milestone_count(env: &Env, count: u32) {
 /// come with a migration for stored `ProtocolFeeBps` values that exceed the new
 /// maximum.
 ///
+/// # Boundary behavior
+/// * `0` and `MAX_FEE_BPS` are accepted.
+/// * `MAX_FEE_BPS + 1` and `u32::MAX` are rejected.
+///
 /// # Panics
 /// Panics with [`Error::InvalidProtocolParameters`] when `bps > MAX_FEE_BPS`.
+///
+/// # Invariants
+/// * `bps <= MAX_FEE_BPS`, so fee arithmetic cannot exceed the total amount
+///   and the payout invariant `net + fee == gross` holds.
 pub(crate) fn validate_protocol_fee_bps(env: &Env, bps: u32) {
     // INVARIANT: fee must not exceed the basis-point denominator, so that
     // net_amount = gross - fee is always ≥ 0 for any gross ≥ 0.
@@ -247,6 +277,10 @@ pub(crate) fn validate_protocol_fee_bps(env: &Env, bps: u32) {
 /// Any change to this constant must be coordinated with `get_bounds()` and the
 /// governance process.
 ///
+/// # Boundary behavior
+/// * `1` and `MAX_SINGLE_AMOUNT_STROOPS` are accepted.
+/// * `0`, `-1`, and `MAX_SINGLE_AMOUNT_STROOPS + 1` are rejected.
+///
 /// # Panics
 /// * [`EscrowError::AmountMustBePositive`] when `amount <= 0`.
 /// * [`EscrowError::InvalidMilestoneAmount`] when `amount > MAX_SINGLE_AMOUNT_STROOPS`.
@@ -256,6 +290,9 @@ pub(crate) fn validate_stroop_amount(env: &Env, amount: i128) {
     // compat contract — do not swap them.
     if amount <= 0 {
         env.panic_with_error(crate::EscrowError::AmountMustBePositive);
+    }
+    if amount > crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS {
+        env.panic_with_error(crate::EscrowError::InvalidMilestoneAmount);
     }
     if amount > crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS {
         env.panic_with_error(crate::EscrowError::InvalidMilestoneAmount);
@@ -321,6 +358,13 @@ mod tests {
     fn validate_escrow_total_cap_rejects_i128_min() {
         let e = env();
         validate_escrow_total_cap(&e, i128::MIN);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_escrow_total_cap_rejects_over_single_amount_max() {
+        let e = env();
+        validate_escrow_total_cap(&e, MAX_SINGLE_AMOUNT_STROOPS + 1);
     }
 
     // ── validate_reputation_config_params ─────────────────────────────────────
@@ -391,6 +435,13 @@ mod tests {
     fn validate_reputation_config_params_rejects_comment_over_ceiling() {
         let e = env();
         validate_reputation_config_params(&e, 1, 5, MAX_REPUTATION_CONFIG_COMMENT_BYTES_CEILING + 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_reputation_config_params_rejects_min_rating_over_ceiling() {
+        let e = env();
+        validate_reputation_config_params(&e, 11, 11, 200);
     }
 
     // ── validate_milestone_count ──────────────────────────────────────────────
@@ -470,6 +521,13 @@ mod tests {
     fn validate_protocol_fee_bps_rejects_u32_max() {
         let e = env();
         validate_protocol_fee_bps(&e, u32::MAX);
+    }
+
+    #[test]
+    #[should_panic]
+    fn validate_protocol_fee_bps_rejects_max_plus_two() {
+        let e = env();
+        validate_protocol_fee_bps(&e, MAX_FEE_BPS + 2);
     }
 
     // ── validate_stroop_amount ────────────────────────────────────────────────

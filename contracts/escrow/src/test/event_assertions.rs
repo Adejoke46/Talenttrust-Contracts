@@ -1,10 +1,10 @@
-#![cfg(test)]
+#`!cfg(test)]
 
-//! Tests for the newly added events: `mlstn_app` (milestone approval) and
-//! `rep_issd` (reputation issuance).
+/// Tests for the newly added events: `mlstn_app` (milestone approval) and
+/// `rep_issd` (reputation issuance).
 
 use soroban_sdk::String;
-use soroban_sdk::{testutils::Events as _, Address, Env, Symbol, TryIntoVal, Val, Vec};
+use soroban_sdk:{testutils::Events as _, Address, Env, Symbol, TryIntoVal, Val, Vec};
 
 use crate::test::EscrowFixture;
 use crate::ReleaseAuthorization;
@@ -43,6 +43,52 @@ fn events_with_topic_and_contract(
     out
 }
 
+/// Returns the number of events emitted with the given primary topic,
+/// regardless of contract ID or secondary topics. Used to assert that a
+/// failed operation emits no event at all.
+fn event_count_for_topic(env: &Env, topic: Symbol) -> u32 {
+    let mut count = 0u32;
+    for (_addr, topics, _data) in env.events().all().iter() {
+        if topics.len() < 1 {
+            continue;
+        }
+        let t0: Symbol = topics.get(0).unwrap().try_into_val(env).unwrap();
+        if t0 == topic {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Returns the number of events emitted by the given contract address,
+/// regardless of topic. Used to assert that a failed operation emits no
+/// events at all.
+fn event_count_for_contract(env: &Env, contract_address: &Address) -> u32 {
+    let mut count = 0u32;
+    for (addr, _topics, _data) in env.events().all().iter() {
+        if &addr == contract_address {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Asserts that no event with the given primary topic was emitted by the
+/// given contract address. This is the compatibility contract: failed
+/// operations must not leak events.
+fn assert_no_event_for_topic(env: &Env, contract_address: &Address, topic: Symbol) {
+    assert_eq(
+        event_count_for_topic(env, topic),
+        0,
+        "no event with this topic should be emitted"
+    );
+    assert_eq(
+        event_count_for_contract(env, contract_address),
+        0,
+        "no event should be emitted by the contract on failure"
+    );
+}
+
 #[test]
 fn approve_milestone_release_emits_mlstn_app_exactly_once() {
     let fixture = EscrowFixture::builder().funded().build();
@@ -60,15 +106,15 @@ fn approve_milestone_release_emits_mlstn_app_exactly_once() {
         topic.clone(),
         contract_id,
     );
-    assert_eq!(events.len(), 1, "Expected exactly one mlstn_app event");
+    assert_eq(events.len(), 1, "Expected exactly one mlstn_app event");
 
     let (idx, payload) = events.get(0).unwrap();
-    assert_eq!(idx, milestone_index);
+    assert_eq(idx, milestone_index);
     let decoded: (u32, Address, u64) = payload.try_into_val(&fixture.env).unwrap();
-    assert_eq!(decoded.0, milestone_index);
-    assert_eq!(decoded.1, fixture.client);
+    assert_eq(decoded.0, milestone_index);
+    assert_eq(decoded.1, fixture.client);
     // Check that timestamp equals the ledger timestamp (which may be 0 in tests)
-    assert_eq!(decoded.2, fixture.env.ledger().timestamp());
+    assert_eq(decoded.2, fixture.env.ledger().timestamp());
 }
 
 #[test]
@@ -88,13 +134,7 @@ fn approve_milestone_release_failure_does_not_emit() {
     assert!(res.is_err(), "Expected error for unauthorized approval");
 
     let topic = Symbol::new(&fixture.env, "mlstn_app");
-    let events =
-        events_with_topic_and_contract(&fixture.env, &fixture.escrow_address, topic, contract_id);
-    assert_eq!(
-        events.len(),
-        0,
-        "No approval event should be emitted on failure"
-    );
+    assert_no_event_for_topic(&fixture.env, &fixture.escrow_address, topic);
 }
 
 #[test]
@@ -115,14 +155,14 @@ fn issue_reputation_emits_rep_issd_exactly_once() {
         topic.clone(),
         contract_id,
     );
-    assert_eq!(events.len(), 1, "Expected exactly one rep_issd event");
+    assert_eq(events.len(), 1, "Expected exactly one rep_issd event");
 
     let (idx, payload) = events.get(0).unwrap();
-    assert_eq!(idx, 0);
+    assert_eq(idx, 0);
     let decoded: (Address, u32, u64) = payload.try_into_val(&fixture.env).unwrap();
-    assert_eq!(decoded.0, fixture.freelancer);
-    assert_eq!(decoded.1, rating);
-    assert_eq!(decoded.2, fixture.env.ledger().timestamp());
+    assert_eq(decoded.0, fixture.freelancer);
+    assert_eq(decoded.1, rating);
+    assert_eq(decoded.2, fixture.env.ledger().timestamp());
 }
 
 #[test]
@@ -142,13 +182,7 @@ fn issue_reputation_failure_does_not_emit() {
     );
 
     let topic = Symbol::new(&fixture.env, "rep_issd");
-    let events =
-        events_with_topic_and_contract(&fixture.env, &fixture.escrow_address, topic, contract_id);
-    assert_eq!(
-        events.len(),
-        0,
-        "No reputation event should be emitted on failure"
-    );
+    assert_no_event_for_topic(&fixture.env, &fixture.escrow_address, topic);
 }
 
 #[test]
@@ -163,20 +197,8 @@ fn read_only_calls_emit_no_events() {
 
     let app_topic = Symbol::new(env, "mlstn_app");
     let issd_topic = Symbol::new(env, "rep_issd");
-    let app_events =
-        events_with_topic_and_contract(env, &fixture.escrow_address, app_topic, contract_id);
-    let issd_events =
-        events_with_topic_and_contract(env, &fixture.escrow_address, issd_topic, contract_id);
-    assert_eq!(
-        app_events.len(),
-        0,
-        "mlstn_app should not be emitted on read-only calls"
-    );
-    assert_eq!(
-        issd_events.len(),
-        0,
-        "rep_issd should not be emitted on read-only calls"
-    );
+    assert_no_event_for_topic(env, &fixture.escrow_address, app_topic);
+    assert_no_event_for_topic(env, &fixture.escrow_address, issd_topic);
 }
 
 #[test]
