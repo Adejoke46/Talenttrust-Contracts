@@ -172,30 +172,38 @@ impl Escrow {
 
     /// Cancel a live pending client migration.
     ///
-    /// The current client must authorize the call, be the contract's client, and a live pending migration must exist.
-    /// The pending migration entry is removed and a `client_migration_cancelled` event is emitted.
-    pub fn cancel_client_migration(env: Env, contract_id: u32, current_client: Address) -> bool {
-        storage::validate_contract_id_bounds(&env, contract_id);
-        Self::require_not_paused(&env);
+    /// The current client must authorize the call, be the contract's client, and a live pending
+    /// migration must exist. The pending migration entry is removed and a
+    /// `client_migration_cancelled` event is emitted.
+    ///
+    /// # Errors
+    /// * [`EscrowError::UnauthorizedRole`] — `current_client` is not the stored contract client.
+    /// * [`EscrowError::InvalidState`] — no live pending migration exists.
+    pub(crate) fn cancel_client_migration_inner(
+        env: &Env,
+        contract_id: u32,
+        current_client: Address,
+    ) -> bool {
+        storage::validate_contract_id_bounds(env, contract_id);
         current_client.require_auth();
 
-        let contract = Self::load_contract(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
+        let contract = Self::load_contract(env, contract_id);
+        Self::require_not_finalized(env, contract_id);
         if current_client != contract.client {
             env.panic_with_error(EscrowError::UnauthorizedRole);
         }
 
         let key = Self::pending_migration_key(contract_id);
-        // Ensure a pending migration exists, otherwise panic with InvalidState
-        let _: PendingClientMigration = read_if_live(&env, &key)
+        // Ensure a pending migration exists, otherwise panic with InvalidState.
+        let _: PendingClientMigration = read_if_live(env, &key)
             .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
 
-        // Remove the pending migration entry
-        remove_transient(&env, &key);
+        // Remove the pending migration entry.
+        remove_transient(env, &key);
 
-        // Emit cancellation event
+        // Emit cancellation event.
         env.events().publish(
-            (Symbol::new(&env, "client_migration_cancelled"), contract_id),
+            (Symbol::new(env, "client_migration_cancelled"), contract_id),
             (current_client, env.ledger().timestamp()),
         );
         true
