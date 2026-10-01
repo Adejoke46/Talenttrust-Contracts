@@ -78,15 +78,18 @@ pub fn get_caller_role(caller: &Address, contract: &Contract) -> Option<Particip
 /// freelancer (and both are required for approval, but this helper only checks
 /// if one caller *can* approve).
 pub fn require_release_authorization(env: &Env, caller: &Address, contract: &Contract) {
-    if !release_authorization_allows(caller, contract) {
-        env.panic_with_error(Error::UnauthorizedRole);
-    }
+    try_require_release_authorization(caller, contract)
+        .unwrap_or_else(|err| env.panic_with_error(err));
 }
 
-/// Pure compatibility predicate for release authorization. Keeping role
-/// selection and mode matching in one function makes all entrypoints agree on
-/// the legacy client/freelancer/arbiter behavior without mutating state.
-pub fn release_authorization_allows(caller: &Address, contract: &Contract) -> bool {
+/// Recoverable authorization check for callers that need to handle a failed
+/// release attempt without entering a panic path. The existing
+/// `require_release_authorization` wrapper preserves the public behavior used
+/// by current entrypoints.
+pub fn try_require_release_authorization(
+    caller: &Address,
+    contract: &Contract,
+) -> Result<(), Error> {
     let role = get_caller_role(caller, contract);
 
     // Caller must be a participant; otherwise reject immediately.
@@ -95,31 +98,31 @@ pub fn release_authorization_allows(caller: &Address, contract: &Contract) -> bo
         match contract.release_authorization {
             ReleaseAuthorization::ClientOnly => {
                 if role != ParticipantRole::Client {
-                    return false;
+                    return Err(Error::UnauthorizedRole);
                 }
             }
             ReleaseAuthorization::ArbiterOnly => {
                 if role != ParticipantRole::Arbiter {
-                    return false;
+                    return Err(Error::UnauthorizedRole);
                 }
             }
             ReleaseAuthorization::ClientAndArbiter => {
                 if role != ParticipantRole::Client && role != ParticipantRole::Arbiter {
-                    return false;
+                    return Err(Error::UnauthorizedRole);
                 }
             }
             ReleaseAuthorization::MultiSig => {
                 if role != ParticipantRole::Client && role != ParticipantRole::Freelancer {
-                    return false;
+                    return Err(Error::UnauthorizedRole);
                 }
             }
         }
     } else {
         // Not a participant
-        return false;
+        return Err(Error::UnauthorizedRole);
     }
 
-    true
+    Ok(())
 }
 
 /// Checks if a caller is a valid participant in a contract.
@@ -324,6 +327,26 @@ mod tests {
     }
 
     #[test]
+    fn test_try_release_authorization_is_deterministic_for_non_participant() {
+        let env = Env::default();
+        let client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let other = Address::generate(&env);
+        let contract = make_test_contract(
+            &env,
+            &client,
+            &freelancer,
+            None,
+            ReleaseAuthorization::ClientOnly,
+        );
+
+        assert_eq!(
+            try_require_release_authorization(&other, &contract),
+            Err(Error::UnauthorizedRole)
+        );
+        assert!(try_require_release_authorization(&client, &contract).is_ok());
+    }
+
     #[test]
     fn test_require_release_authorization_client_only_denies_freelancer() {
         let env = Env::default();
