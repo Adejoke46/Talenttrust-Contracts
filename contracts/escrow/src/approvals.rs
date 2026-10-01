@@ -703,8 +703,8 @@ pub fn get_authorization_records(
     let mut records = Vec::new(env);
 
     for index in start..end {
-        let approval_key = DataKey::MilestoneApprovals(contract_id, index);
-        let approvals: Option<MilestoneApprovals> = env.storage().persistent().get(&approval_key);
+        let approval_key = keys::milestone_approval_key(contract_id, index);
+        let approvals: Option<MilestoneApprovals> = env.storage().temporary().get(&approval_key);
 
         let has_approvals = approvals.is_some();
         let (client_approved, freelancer_approved, arbiter_approved) = match &approvals {
