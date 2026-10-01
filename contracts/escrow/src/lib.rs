@@ -968,8 +968,6 @@ impl Escrow {
             max_settlement: Self::effective_max_settlement(&env),
         }
     }
-        }
-    }
 
     /// Return the decimal count of the bound settlement token, or `None` when
     /// no token has been bound yet.
