@@ -165,3 +165,38 @@ That flow is the easiest way to see how the storage model behaves in practice: e
 - The milestone vector is the canonical source of milestone-level release/refund state.
 - The relevant tests live in [contracts/escrow/src/test/storage.rs](../contracts/escrow/src/test/storage.rs) and [contracts/escrow/src/test/accounting_invariants.rs](../contracts/escrow/src/test/accounting_invariants.rs).
 - When reading the contract, start with the contract record and the milestone vector; the rest of the storage keys are either configuration, governance, or auxiliary state.
+
+## 8. Storage accessor compatibility contract
+
+The helpers in [contracts/escrow/src/storage.rs](../contracts/escrow/src/storage.rs)
+are the boundary every storage read passes through, so their observable
+behaviour is treated as a compatibility contract and is locked by unit tests in
+that file. Callers and off-chain indexers can rely on the following:
+
+### 8.1 Reserved id `0`
+
+`DataKey::NextContractId` starts at `1`, so id `0` is never a live contract and
+is reserved as the "not found" sentinel. Two guards exist, on purpose:
+
+| Guard | Used by | Error for id `0` |
+| --- | --- | --- |
+| `storage::validate_contract_id_bounds` | Mutating entrypoint preambles (including `propose`/`accept`/`cancel_client_migration` and `rollback_dispute`) | `InvalidContractId` (invalid input) |
+| `storage::load_contract` / `load_milestones` / `load_contract_checked` / `is_finalized` / `require_not_finalized` | Loaders and predicates, and the root readers that bypass the strict guard (`get_contract`, `get_milestones`, `get_milestone`, `get_contract_summary`, `get_refundable_balance`) | `ContractNotFound` |
+
+This keeps the sentinel indistinguishable from a missing record on read paths,
+while still rejecting `0` as invalid input on write paths.
+
+### 8.2 Empty and TTL-evicted data
+
+A missing `DataKey::Contract(id)` or `(DataKey::Contract(id), "milestones")`
+entry always surfaces as `ContractNotFound`. The helpers never substitute a
+default/zero value, so a key evicted by the TTL policy can never be read back as
+real state.
+
+### 8.3 Administrative nonce
+
+`storage::consume_admin_nonce` stores a monotonic `u64` under
+`DataKey::AdminNonce`. It accepts only `current + 1`, so replay of a consumed
+nonce and any future nonce are rejected with `StaleNonce`. Exhaustion
+(`u64::MAX`) fails closed with `PotentialOverflow` instead of wrapping to `0`,
+and a rejected nonce performs no partial write.

@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Authorization-matrix tests for settlement actions.
 //!
 //! Covers every settlement-related entrypoint against every role (admin,
@@ -14,8 +15,6 @@
 //! | `get_finalization_record` | - | - | - | - | - | (read-only) |
 //!
 //! Run: `cargo test -p escrow --lib settlement_auth_matrix`
-
-#![cfg(test)]
 
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 

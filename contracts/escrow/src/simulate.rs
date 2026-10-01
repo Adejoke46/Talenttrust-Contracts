@@ -126,17 +126,10 @@ impl Escrow {
 
         let net_amount = gross_amount - protocol_fee;
 
-        let accumulated_fees: i128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::AccumulatedProtocolFees)
-            .unwrap_or(0);
-
         let available_balance = match contract
             .funded_amount
             .checked_sub(contract.released_amount)
             .and_then(|balance| balance.checked_sub(contract.refunded_amount))
-            .and_then(|balance| balance.checked_sub(accumulated_fees))
         {
             Some(balance) => balance,
             None => return err(EscrowError::PotentialOverflow as u32),
@@ -218,16 +211,23 @@ impl Escrow {
             ))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
-        let total_milestone_amount: i128 = milestones.iter().map(|m| m.amount).sum();
+        let total_milestone_amount: i128 = match crate::amount_validation::accumulate_amounts(
+            milestones.iter().map(|m| m.amount)
+        ) {
+            Ok(total) => total,
+            Err(e) => env.panic_with_error(e),
+        };
 
-        let new_funded_amount = contract
-            .funded_amount
-            .checked_add(amount)
-            .unwrap_or_else(|| env.panic_with_error(Error::AmountMustBePositive));
-
-        if new_funded_amount > total_milestone_amount {
-            env.panic_with_error(Error::AmountMustBePositive);
+        match crate::amount_validation::validate_deposit_amount(
+            amount,
+            contract.funded_amount,
+            total_milestone_amount,
+        ) {
+            Ok(_) => {}
+            Err(e) => env.panic_with_error(e),
         }
+
+        let new_funded_amount = contract.funded_amount.checked_add(amount).unwrap(); // guaranteed safe by validation
 
         let projected_status = if new_funded_amount >= total_milestone_amount {
             ContractStatus::Funded
@@ -298,10 +298,10 @@ impl Escrow {
         for i in 0..len {
             native_milestones[i] = milestones.get(i as u32).unwrap();
         }
-        match amount_validation::validate_milestone_amounts(&native_milestones[..len], max_total) {
-            Ok(_) => (),
+        let total_amount = match amount_validation::validate_milestone_amounts(&native_milestones[..len], max_total) {
+            Ok(total) => total,
             Err(err) => env.panic_with_error(err),
-        }
+        };
 
         // Read next contract ID without incrementing
         ttl::extend_next_contract_id_ttl(&env);
@@ -310,8 +310,6 @@ impl Escrow {
             .persistent()
             .get(&DataKey::NextContractId)
             .unwrap_or(1);
-
-        let total_amount: i128 = milestones.iter().sum();
 
         SimulateCreateContractOutcome {
             contract_id,
