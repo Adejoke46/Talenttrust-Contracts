@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::{symbol_short, testutils::Events, vec, Symbol, Val};
+use soroban_sdk::{symbol_short, testutils'::Events, vec, Symbol, Val};
 
 /// Helper to extract all indexed contract events `(symbol_short!("contract"), contract_id)`.
 fn get_contract_indexed_events(
@@ -40,7 +40,7 @@ fn test_indexed_event_emitted_on_create_contract() {
         &client_addr,
         &freelancer_addr,
         &None,
-        &vec![&env, 100_0000000],
+        &vec[&env, 100_0000000],
         &ReleaseAuthorization::ClientOnly,
     );
 
@@ -48,11 +48,11 @@ fn test_indexed_event_emitted_on_create_contract() {
     assert!(!events.is_empty());
 
     let (status, funded, released, refunded, total_deposited) = events.get(0).unwrap();
-    assert_eq!(status, ContractStatus::Created as u32);
-    assert_eq!(funded, 0);
-    assert_eq!(released, 0);
-    assert_eq!(refunded, 0);
-    assert_eq!(total_deposited, 0);
+    assert_eq(status, ContractStatus::Created as u32);
+    assert_eq(funded, 0);
+    assert_eq(released, 0);
+    assert_eq(refunded, 0);
+    assert_eq(total_deposited, 0);
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn test_indexed_event_emitted_on_deposit() {
         &client_addr,
         &freelancer_addr,
         &None,
-        &vec![&env, 100_0000000],
+        &vec[&env, 100_0000000],
         &ReleaseAuthorization::ClientOnly,
     );
 
@@ -90,11 +90,11 @@ fn test_indexed_event_emitted_on_deposit() {
 
     let latest_event = events.get(events.len() - 1).unwrap();
     let (status, funded, released, refunded, total_deposited) = latest_event;
-    assert_eq!(status, ContractStatus::Funded as u32);
-    assert_eq!(funded, 100_0000000);
-    assert_eq!(released, 0);
-    assert_eq!(refunded, 0);
-    assert_eq!(total_deposited, 100_0000000);
+    assert_eq(status, ContractStatus::Funded as u32);
+    assert_eq(funded, 100_0000000);
+    assert_eq(released, 0);
+    assert_eq(refunded, 0);
+    assert_eq(total_deposited, 100_0000000);
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn test_indexed_event_emitted_on_milestone_release() {
         &client_addr,
         &freelancer_addr,
         &None,
-        &vec![&env, 100_0000000],
+        &vec[&env, 100_0000000],
         &ReleaseAuthorization::ClientOnly,
     );
 
@@ -130,11 +130,11 @@ fn test_indexed_event_emitted_on_milestone_release() {
     let events = get_contract_indexed_events(&env, id);
     let latest_event = events.get(events.len() - 1).unwrap();
     let (status, funded, released, refunded, total_deposited) = latest_event;
-    assert_eq!(status, ContractStatus::Completed as u32);
-    assert_eq!(funded, 100_0000000);
-    assert_eq!(released, 100_0000000);
-    assert_eq!(refunded, 0);
-    assert_eq!(total_deposited, 100_0000000);
+    assert_eq(status, ContractStatus::Completed as u32);
+    assert_eq(funded, 100_0000000);
+    assert_eq(released, 100_0000000);
+    assert_eq(refunded, 0);
+    assert_eq(total_deposited, 100_0000000);
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn test_no_topic_collision_with_existing_events() {
     ];
 
     for existing in existing_topics.iter() {
-        assert_ne!(
+        assert_ne(
             indexed_topic, *existing,
             "Topic collision detected between 'contract' and existing topic"
         );

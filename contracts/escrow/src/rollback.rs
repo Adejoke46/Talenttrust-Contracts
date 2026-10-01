@@ -1,4 +1,5 @@
 use crate::storage;
+use crate::storage::validate_contract_id_bounds;
 use crate::ttl::{PERSISTENT_BUMP_THRESHOLD, PERSISTENT_TTL_LEDGERS};
 use crate::{ttl, Contract, ContractStatus, DataKey, Error, Escrow, Milestone};
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
@@ -40,7 +41,7 @@ pub(crate) fn clear_dispute_rollback(env: &Env, contract_id: u32) {
 }
 
 pub(crate) fn rollback_dispute_impl(env: &Env, contract_id: u32) -> bool {
-    storage::validate_contract_id_bounds(env, contract_id);
+    validate_contract_id_bounds(env, contract_id);
     Escrow::require_initialized(env);
     Escrow::require_not_paused(env);
 
@@ -82,6 +83,10 @@ pub(crate) fn rollback_dispute_impl(env: &Env, contract_id: u32) -> bool {
         env.panic_with_error(Error::RollbackNotAllowed);
     }
 
+    if record.contract.status == ContractStatus::Disputed {
+        env.panic_with_error(Error::RollbackNotAllowed);
+    }
+
     let restored_status = record.contract.status;
     contract.status = restored_status;
     env.storage()
@@ -89,6 +94,18 @@ pub(crate) fn rollback_dispute_impl(env: &Env, contract_id: u32) -> bool {
         .set(&DataKey::Contract(contract_id), &contract);
     clear_dispute_rollback(env, contract_id);
     ttl::extend_contract_and_milestones_ttl(env, contract_id);
+
+    // Void every outstanding approval when the pre-dispute status is restored.
+    //
+    // This is the load-bearing half of the stale-approval fix. Restoring
+    // `Funded` would otherwise make any approval recorded *before* the dispute
+    // releasable again, letting funds move on a consent that predates the
+    // dispute and that no party re-affirmed afterwards. Clearing here means a
+    // rolled-back contract always requires fresh approvals.
+    //
+    // `raise_dispute` already clears, so this is normally a no-op; it is
+    // retained as the guarantee for disputes raised before that clear existed.
+    crate::approvals::clear_all_approvals(env, contract_id);
 
     env.events().publish(
         (symbol_short!("rollback"), contract_id),

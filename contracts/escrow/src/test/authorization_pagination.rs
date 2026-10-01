@@ -1,4 +1,4 @@
-//! Tests for paginated authorization records enumeration.
+/// Tests for paginated authorization records enumeration.
 
 use super::{default_milestones, register_client};
 use crate::types::ReleaseAuthorization;
@@ -147,8 +147,73 @@ fn authorization_records_ceiling_clamp() {
         &ReleaseAuthorization::ClientOnly,
     );
 
-    // Request limit 1000, should be clamped by pagination ceiling (MAX_PAGINATION_LIMIT = 50)
+    // Request limit 1000, should be clamped by pagination ceiling (crate::MAX_PAGINATION_LIMIT = 50)
     // returning all 3 available milestones without error
     let records = escrow.get_authorization_records(&id, &0u32, &1000u32);
     assert_eq!(records.len(), 3);
+}
+
+#[test]
+fn authorization_records_repeated_queries_are_deterministic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let escrow = register_client(&env);
+
+    let (client, freelancer, _) = make_participants(&env);
+    let milestones = default_milestones(&env);
+    let id = escrow.create_contract(
+        &client,
+        &freelancer,
+        &None,
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
+    );
+
+    // Repeated queries must not mutate state or change results.
+    let first = escrow.get_authorization_records(&id, &0u32, &10u32);
+    let second = escrow.get_authorization_records(&id, &0u32, &10u32);
+    assert_eq!(first.len(), second.len());
+    for i in 0..first.len() {
+        let a = first.get(i).unwrap();
+        let b = second.get(i).unwrap();
+        assert_eq!(a.milestone_index, b.milestone_index);
+        assert_eq!(a.has_approvals, b.has_approvals);
+        assert_eq!(a.client_approved, b.client_approved);
+        assert_eq!(a.freelancer_approved, b.freelancer_approved);
+        assert_eq!(a.arbiter_approved, b.arbiter_approved);
+    }
+}
+
+#[test]
+fn authorization_records_page_boundaries_are_consistent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let escrow = register_client(&env);
+
+    let (client, freelancer, _) = make_participants(&env);
+    let milestones = default_milestones(&env);
+    let id = escrow.create_contract(
+        &client,
+        &freelancer,
+        &None,
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
+    );
+
+    // Boundary: limit exactly equals remaining count.
+    let all = escrow.get_authorization_records(&id, &0u32, &3u32);
+    assert_eq!(all.len(), 3);
+
+    // Boundary: limit one less than remaining count.
+    let partial = escrow.get_authorization_records(&id, &0u32, &2u32);
+    assert_eq!(partial.len(), 2);
+
+    // Boundary: start at last index.
+    let last = escrow.get_authorization_records(&id, &2u32, &100u32);
+    assert_eq!(last.len(), 1);
+    assert_eq!(last.get(0).unwrap().milestone_index, 2);
+
+    // Boundary: start at length (exactly out of range).
+    let none = escrow.get_authorization_records(&id, &3u32, &100u32);
+    assert_eq!(none.len(), 0);
 }

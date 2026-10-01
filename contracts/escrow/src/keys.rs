@@ -41,6 +41,8 @@
 //! existing ledger entries use the serialized form of these keys and would
 //! become unreachable if the format changes.
 
+use crate::milestones_consts::MAX_MILESTONES;
+use crate::types::{DataKey, Error};
 use soroban_sdk::{Env, Symbol};
 
 use crate::types::DataKey;
@@ -71,10 +73,13 @@ pub fn milestone_key(env: &Env, contract_id: u32) -> (DataKey, Symbol) {
 /// have to reconstruct it independently.
 #[inline]
 pub fn milestone_symbol(env: &Env) -> Symbol {
+
     Symbol::new(env, "milestones")
+
 }
 
 /// Returns the temporary storage key for milestone release approvals:
+
 /// `DataKey::MilestoneApprovals(contract_id, milestone_index)`.
 ///
 /// # Design note

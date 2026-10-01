@@ -11,6 +11,7 @@ use soroban_sdk::{
 
 use crate::{Error, Escrow, EscrowClient, ReleaseAuthorization};
 
+/// Mirrors the production TTL constant so tests fail loudly if it drifts.
 const PENDING_APPROVAL_TTL_LEDGERS: u32 = crate::ttl::PENDING_APPROVAL_TTL_LEDGERS;
 
 fn milestones(env: &Env) -> soroban_sdk::Vec<i128> {
@@ -21,6 +22,8 @@ fn total() -> i128 {
     6000_0000000_i128
 }
 
+/// Registers a fresh escrow contract and initializes it with a generated admin.
+/// Returns a client bound to the new contract address.
 fn new_client(env: &Env) -> EscrowClient<'_> {
     let contract_id = env.register(Escrow, ());
     let client = EscrowClient::new(env, &contract_id);
@@ -37,6 +40,7 @@ fn setup(env: &Env) -> (Address, Address, Address) {
     )
 }
 
+/// Advances the ledger sequence by `by`, saturating at u32::MAX to avoid overflow.
 fn advance_ledger(env: &Env, _contract_id: &Address, by: u32) {
     env.ledger().with_mut(|li| {
         li.sequence_number = li.sequence_number.saturating_add(by);
@@ -67,6 +71,7 @@ fn test_approve_milestone_client_only() {
     assert!(!approvals.freelancer_approved);
 }
 
+/// MultiSig requires both client and freelancer approvals before release.
 #[test]
 fn test_approve_milestone_multisig() {
     let env = Env::default();
@@ -93,6 +98,7 @@ fn test_approve_milestone_multisig() {
     assert!(approvals.freelancer_approved);
 }
 
+/// ArbiterOnly: only the arbiter's approval is required.
 #[test]
 fn test_approve_milestone_arbiter_only() {
     let env = Env::default();
@@ -117,6 +123,7 @@ fn test_approve_milestone_arbiter_only() {
     assert!(approvals.arbiter_approved);
 }
 
+/// ClientAndArbiter: client approval alone is insufficient; arbiter must also approve.
 #[test]
 fn test_approve_milestone_client_and_arbiter() {
     let env = Env::default();
@@ -141,6 +148,7 @@ fn test_approve_milestone_client_and_arbiter() {
     assert!(approvals.client_approved);
 }
 
+/// Duplicate approval from the same role must be rejected with AlreadyApproved.
 #[test]
 fn test_duplicate_approval_rejected() {
     let env = Env::default();
@@ -162,6 +170,7 @@ fn test_duplicate_approval_rejected() {
     super::assert_contract_error(result, Error::AlreadyApproved);
 }
 
+/// A caller without an authorized role must be rejected with UnauthorizedRole.
 #[test]
 fn test_unauthorized_approval_rejected() {
     let env = Env::default();
@@ -182,6 +191,7 @@ fn test_unauthorized_approval_rejected() {
     super::assert_contract_error(result, Error::UnauthorizedRole);
 }
 
+/// Release without any approval must fail with InsufficientApprovals.
 #[test]
 fn test_release_requires_approval() {
     let env = Env::default();
@@ -202,6 +212,7 @@ fn test_release_requires_approval() {
     super::assert_contract_error(result, Error::InsufficientApprovals);
 }
 
+/// Release with the required approval succeeds and clears the approval record.
 #[test]
 fn test_release_with_approval_succeeds() {
     let env = Env::default();
@@ -227,6 +238,7 @@ fn test_release_with_approval_succeeds() {
     assert!(approvals.is_none());
 }
 
+/// MultiSig: release must fail until both client and freelancer approve.
 #[test]
 fn test_multisig_requires_both_approvals() {
     let env = Env::default();
@@ -252,6 +264,7 @@ fn test_multisig_requires_both_approvals() {
     assert!(client.release_milestone(&id, &client_addr, &0));
 }
 
+/// Approving an already-released milestone must fail with MilestoneAlreadyReleased.
 #[test]
 fn test_approve_already_released_milestone_fails() {
     let env = Env::default();
@@ -274,6 +287,7 @@ fn test_approve_already_released_milestone_fails() {
     super::assert_contract_error(result, Error::MilestoneAlreadyReleased);
 }
 
+/// Approving an out-of-range milestone index must fail with IndexOutOfBounds.
 #[test]
 fn test_approve_invalid_milestone_index() {
     let env = Env::default();
@@ -294,6 +308,7 @@ fn test_approve_invalid_milestone_index() {
     super::assert_contract_error(result, Error::IndexOutOfBounds);
 }
 
+/// Approvals require the contract to be in Funded state.
 #[test]
 fn test_approve_requires_funded_state() {
     let env = Env::default();
@@ -313,6 +328,7 @@ fn test_approve_requires_funded_state() {
     super::assert_contract_error(result, Error::InvalidState);
 }
 
+/// Approvals for different milestones are tracked independently.
 #[test]
 fn test_multiple_milestones_independent_approvals() {
     let env = Env::default();
@@ -343,6 +359,7 @@ fn test_multiple_milestones_independent_approvals() {
 
 // ─── TTL Expiry Tests ─────────────────────────────────────────────────────────────
 
+/// ClientOnly approval expires after PENDING_APPROVAL_TTL_LEDGERS + 1.
 #[test]
 fn test_client_only_approval_expires_after_ttl() {
     let env = Env::default();
@@ -379,6 +396,7 @@ fn test_client_only_approval_expires_after_ttl() {
     super::assert_contract_error(result, Error::InsufficientApprovals);
 }
 
+/// Boundary: approval is still valid at exactly PENDING_APPROVAL_TTL_LEDGERS.
 #[test]
 fn test_client_only_approval_valid_at_exactly_ttl_boundary() {
     let env = Env::default();
@@ -418,6 +436,7 @@ fn test_client_only_approval_valid_at_exactly_ttl_boundary() {
     );
 }
 
+/// ArbiterOnly approval expires after TTL, blocking release.
 #[test]
 fn test_arbiter_only_approval_expires_after_ttl() {
     let env = Env::default();
@@ -447,6 +466,7 @@ fn test_arbiter_only_approval_expires_after_ttl() {
     super::assert_contract_error(result, Error::InsufficientApprovals);
 }
 
+/// ClientAndArbiter approval expires after TTL, blocking release.
 #[test]
 fn test_client_and_arbiter_approval_expires_after_ttl() {
     let env = Env::default();
@@ -476,6 +496,8 @@ fn test_client_and_arbiter_approval_expires_after_ttl() {
     super::assert_contract_error(result, Error::InsufficientApprovals);
 }
 
+/// MultiSig: if the first approval expires before the second arrives, release
+/// must fail until both approvals are re-collected within the same TTL window.
 #[test]
 fn test_multisig_one_approval_expires_before_second_arrives() {
     let env = Env::default();
@@ -514,6 +536,7 @@ fn test_multisig_one_approval_expires_before_second_arrives() {
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
 }
 
+/// MultiSig: both approvals expire together after TTL, blocking release.
 #[test]
 fn test_multisig_both_approvals_expire_after_ttl() {
     let env = Env::default();
@@ -635,6 +658,7 @@ fn test_multisig_read_within_bump_threshold_refreshes_ttl() {
     );
 }
 
+/// TTL is tracked per-milestone; expiry of one does not affect another.
 #[test]
 fn test_approval_ttl_independent_per_milestone() {
     let env = Env::default();
@@ -667,6 +691,8 @@ fn test_approval_ttl_independent_per_milestone() {
     super::assert_contract_error(result_0, Error::InsufficientApprovals);
 }
 
+/// Helper: creates a contract and injects Funded status/funded_amount directly
+/// so approval tests don't require a bound SAC token.
 fn funded_no_approvals(
     env: &Env,
     client: &EscrowClient<'_>,
@@ -696,6 +722,7 @@ fn funded_no_approvals(
     id
 }
 
+/// Before any approval, the deadline view returns None.
 #[test]
 fn test_deadline_none_before_any_approval() {
     let env = Env::default();
@@ -718,6 +745,7 @@ fn test_deadline_none_before_any_approval() {
     );
 }
 
+/// After the first approval, the deadline is current_sequence + TTL.
 #[test]
 fn test_deadline_some_after_first_approval() {
     let env = Env::default();
@@ -747,6 +775,7 @@ fn test_deadline_some_after_first_approval() {
     assert_eq!(deadline.unwrap(), expected);
 }
 
+/// get_approval_deadline is a pure view and must not extend the TTL.
 #[test]
 fn test_deadline_does_not_extend_ttl() {
     let env = Env::default();
@@ -775,6 +804,7 @@ fn test_deadline_does_not_extend_ttl() {
     );
 }
 
+/// Unknown milestone index yields None from the deadline view.
 #[test]
 fn test_deadline_none_for_unknown_milestone() {
     let env = Env::default();
@@ -797,6 +827,7 @@ fn test_deadline_none_for_unknown_milestone() {
     assert!(deadline.is_none());
 }
 
+/// Deadlines are tracked independently per milestone.
 #[test]
 fn test_deadline_independent_per_milestone() {
     let env = Env::default();
