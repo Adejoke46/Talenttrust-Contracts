@@ -79,12 +79,16 @@ use soroban_sdk::panic_with_error;
 /// # Panics
 /// Panics with [`Error::InvalidProtocolParameters`] when `max_escrow_total_stroops <= 0`.
 pub(crate) fn validate_escrow_total_cap(env: &Env, max_escrow_total_stroops: i128) {
-    if max_escrow_total_stroops <= 0 {
-        env.panic_with_error(Error::InvalidProtocolParameters);
-    }
-    if max_escrow_total_stroops > MAX_SINGLE_AMOUNT_STROOPS {
-        env.panic_with_error(Error::InvalidProtocolParameters);
-    }
+    validate_escrow_total_cap_value(max_escrow_total_stroops)
+        .unwrap_or_else(|err| env.panic_with_error(err));
+}
+
+/// Pure form of [`validate_escrow_total_cap`]. Callers that can recover from
+/// invalid configuration should use this form before mutating storage.
+pub(crate) fn validate_escrow_total_cap_value(value: i128) -> Result<(), Error> {
+    (value > 0)
+        .then_some(())
+        .ok_or(Error::InvalidProtocolParameters)
 }
 
 // ── validate_reputation_config_params ────────────────────────────────────────
@@ -138,17 +142,24 @@ pub(crate) fn validate_reputation_config_params(
     max_rating: u32,
     max_comment_bytes: u32,
 ) {
-    // INVARIANT: min_rating must be at least MIN_RATING (1).
-    // Callers that decode InvalidProtocolParameters for this rejection depend
-    // on this check being present and firing before the max_rating check.
+    validate_reputation_config_params_value(min_rating, max_rating, max_comment_bytes)
+        .unwrap_or_else(|err| env.panic_with_error(err));
+}
+
+pub(crate) fn validate_reputation_config_params_value(
+    min_rating: u32,
+    max_rating: u32,
+    max_comment_bytes: u32,
+) -> Result<(), Error> {
     if min_rating < MIN_RATING
         || max_rating < min_rating
         || max_rating > MAX_REPUTATION_CONFIG_RATING_CEILING
         || max_comment_bytes < MIN_COMMENT_BYTES
         || max_comment_bytes > MAX_REPUTATION_CONFIG_COMMENT_BYTES_CEILING
     {
-        env.panic_with_error(Error::InvalidProtocolParameters);
+        return Err(Error::InvalidProtocolParameters);
     }
+    Ok(())
 }
 
 // ── validate_milestone_count ──────────────────────────────────────────────────
@@ -186,15 +197,17 @@ pub(crate) fn validate_reputation_config_params(
 /// * [`EscrowError::EmptyMilestones`] when `count == 0`.
 /// * [`EscrowError::TooManyMilestones`] when `count > MAX_MILESTONES`.
 pub(crate) fn validate_milestone_count(env: &Env, count: u32) {
-    // INVARIANT: zero-length milestone list must produce EmptyMilestones, not
-    // TooManyMilestones. The ordering of these two checks is part of the compat
-    // contract — do not swap them.
+    validate_milestone_count_value(count).unwrap_or_else(|err| env.panic_with_error(err));
+}
+
+pub(crate) fn validate_milestone_count_value(count: u32) -> Result<(), EscrowError> {
     if count == 0 {
-        env.panic_with_error(EscrowError::EmptyMilestones);
+        return Err(EscrowError::EmptyMilestones);
     }
     if count > MAX_MILESTONES {
-        env.panic_with_error(EscrowError::TooManyMilestones);
+        return Err(EscrowError::TooManyMilestones);
     }
+    Ok(())
 }
 
 // ── validate_protocol_fee_bps ─────────────────────────────────────────────────
@@ -239,11 +252,13 @@ pub(crate) fn validate_milestone_count(env: &Env, count: u32) {
 /// * `bps <= MAX_FEE_BPS`, so fee arithmetic cannot exceed the total amount
 ///   and the payout invariant `net + fee == gross` holds.
 pub(crate) fn validate_protocol_fee_bps(env: &Env, bps: u32) {
-    // INVARIANT: fee must not exceed the basis-point denominator, so that
-    // net_amount = gross - fee is always ≥ 0 for any gross ≥ 0.
-    if bps > MAX_FEE_BPS {
-        env.panic_with_error(Error::InvalidProtocolParameters);
-    }
+    validate_protocol_fee_bps_value(bps).unwrap_or_else(|err| env.panic_with_error(err));
+}
+
+pub(crate) fn validate_protocol_fee_bps_value(bps: u32) -> Result<(), Error> {
+    (bps <= MAX_FEE_BPS)
+        .then_some(())
+        .ok_or(Error::InvalidProtocolParameters)
 }
 
 // ── validate_stroop_amount ────────────────────────────────────────────────────
@@ -285,18 +300,17 @@ pub(crate) fn validate_protocol_fee_bps(env: &Env, bps: u32) {
 /// * [`EscrowError::AmountMustBePositive`] when `amount <= 0`.
 /// * [`EscrowError::InvalidMilestoneAmount`] when `amount > MAX_SINGLE_AMOUNT_STROOPS`.
 pub(crate) fn validate_stroop_amount(env: &Env, amount: i128) {
-    // INVARIANT: non-positive amounts must produce AmountMustBePositive, not
-    // InvalidMilestoneAmount. The ordering of these two checks is part of the
-    // compat contract — do not swap them.
+    validate_stroop_amount_value(amount).unwrap_or_else(|err| env.panic_with_error(err));
+}
+
+pub(crate) fn validate_stroop_amount_value(amount: i128) -> Result<(), EscrowError> {
     if amount <= 0 {
-        env.panic_with_error(crate::EscrowError::AmountMustBePositive);
+        return Err(crate::EscrowError::AmountMustBePositive);
     }
     if amount > crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS {
-        env.panic_with_error(crate::EscrowError::InvalidMilestoneAmount);
+        return Err(crate::EscrowError::InvalidMilestoneAmount);
     }
-    if amount > crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS {
-        env.panic_with_error(crate::EscrowError::InvalidMilestoneAmount);
-    }
+    Ok(())
 }
 
 // ── Internal tests ─────────────────────────────────────────────────────────────
@@ -361,10 +375,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn validate_escrow_total_cap_rejects_over_single_amount_max() {
-        let e = env();
-        validate_escrow_total_cap(&e, MAX_SINGLE_AMOUNT_STROOPS + 1);
+    fn pure_validators_report_recoverable_errors_without_storage_mutation() {
+        assert_eq!(
+            validate_escrow_total_cap_value(0),
+            Err(Error::InvalidProtocolParameters)
+        );
+        assert_eq!(
+            validate_protocol_fee_bps_value(MAX_FEE_BPS + 1),
+            Err(Error::InvalidProtocolParameters)
+        );
+        assert_eq!(
+            validate_milestone_count_value(0),
+            Err(EscrowError::EmptyMilestones)
+        );
+        assert_eq!(
+            validate_stroop_amount_value(-1),
+            Err(EscrowError::AmountMustBePositive)
+        );
     }
 
     // ── validate_reputation_config_params ─────────────────────────────────────
