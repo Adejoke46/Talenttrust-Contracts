@@ -50,7 +50,7 @@ use crate::ttl::{
     PERSISTENT_TTL_LEDGERS,
 };
 use crate::{Contract, ContractStatus, DataKey, Error, Escrow, EscrowError};
-use soroban_sdk::{contracttype, Address, Env, Symbol};
+use soroban_sdk:{contracttype, Address, Env, Symbol};
 
 // ── ContractV1 (pre-reputation_issued layout) ────────────────────────────────
 
@@ -99,6 +99,19 @@ pub struct PendingClientMigration {
     pub expires_at_ledger: u32,
 }
 
+/// Record of a completed migration, used to make recovery deterministic.
+///
+/// This is written in the same logical step as the contract update and the
+/// pending-migration removal, so a retry or partial failure can always observe
+/// whether the migration already completed and avoid double-applying it.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletedClientMigration {
+    pub previous_client: Address,
+    pub current_client: Address,
+    pub completed_at_ledger: u32,
+}
+
 impl Escrow {
     // ── Storage key helpers ──────────────────────────────────────────────────
 
@@ -117,7 +130,7 @@ impl Escrow {
         env.storage()
             .persistent()
             .get::<_, Contract>(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound))
+            .unwrap_or_else(`|| env.panic_with_error(Error::ContractNotFound))
     }
 
     /// Load a contract and transparently upgrade it from `ContractV1` to the
@@ -219,14 +232,14 @@ impl Escrow {
     /// `InvalidStatusTransition` for `Completed`, `Cancelled`, `Refunded`,
     /// `Disputed`.
     pub(crate) fn require_migration_allowed(env: &Env, status: ContractStatus) {
-        if matches!(
+        if matches(
             status,
             ContractStatus::Completed
                 | ContractStatus::Cancelled
                 | ContractStatus::Refunded
                 | ContractStatus::Disputed
         ) {
-            env.panic_with_error(Error::InvalidStatusTransition);
+            env.panic_with_error(Error::InvalidStateTransition);
         }
     }
 
@@ -243,6 +256,23 @@ impl Escrow {
             &key,
             PENDING_MIGRATION_BUMP_THRESHOLD,
             PENDING_MIGRATION_TTL_LEDGERS,
+        )
+    }
+
+    /// Load the live pending migration record for `contract_id`.
+///
+/// Returns `None` when no record exists or the record has expired
+/// (ledger sequence >= `expires_at_ledger`). This is the single
+/// authoritative liveness check used by all mutating entry points.
+/// Callers that need a live record must panic with
+/// [`EscrowError::InvalidState`] when this returns `None`.
+    pub(crate) fn load_live_pending_migration(
+        env: &Env,
+        contract_id: u32,
+    ) -> Option<PendingClientMigration> {
+        read_if_live::<_, PendingClientMigration>(
+            env,
+            &Self::pending_migration_key(contract_id),
         )
     }
 
@@ -320,8 +350,9 @@ impl Escrow {
         if Self::pending_migration_exists(env, contract_id) {
             env.panic_with_error(EscrowError::InvalidState);
         }
+        Self::require_no_role_overlap(env, &contract, &new_client);
 
-        let requested_at = env.ledger().sequence();
+        let requested_at = env.ledger.sequence();
         let expires_at = requested_at.saturating_add(PENDING_MIGRATION_TTL_LEDGERS);
         let pending = PendingClientMigration {
             current_client: current_client.clone(),
@@ -404,6 +435,9 @@ impl Escrow {
         if pending.current_client != contract.client {
             env.panic_with_error(EscrowError::InvalidState);
         }
+        // No-op invariant: the proposed client must differ from the current
+        // client at acceptance time.
+        Self::require_distinct_client(&env, &contract.client, &new_client);
 
         // 8. Re-check role overlap at acceptance time: roles may have changed
         //    between proposal and acceptance (e.g. arbiter was set, freelancer
