@@ -83,21 +83,7 @@ mod governance_proposal;
 mod keys;
 mod keys_recovery;
 mod migration;
-mod milestone_transitions;
-mod milestones;
-pub mod milestones_consts;
-mod refund;
 mod refund_impl;
-mod release;
-mod reputation;
-mod reputation_migration;
-mod rollback;
-mod schema_migration;
-mod settlement;
-mod simulate;
-mod storage;
-mod storage_validation;
-pub mod token_scale;
 mod ttl;
 mod types;
 mod utils;
@@ -1824,7 +1810,119 @@ impl Escrow {
         contract_id: u32,
         milestone_indices: Vec<u32>,
     ) -> i128 {
-        refund::execute(env, contract_id, milestone_indices)
+        Self::require_not_paused(&env);
+        refund_impl::validate_refund_request(&env, &milestone_indices);
+
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+
+        // Extend TTL on contract read
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        let mut contract: Contract = Self::require_active_contract(&env, contract_id);
+        let was_disputed = contract.status == ContractStatus::Disputed;
+
+        // Only allow refunds while the contract is still in an active,
+        // unreleased state. Cancelled, Completed, and Refunded contracts
+        // must not be refundable again.
+        if contract.status != ContractStatus::Created
+            && contract.status != ContractStatus::Funded
+            && contract.status != ContractStatus::Disputed
+        {
+            env.panic_with_error(EscrowError::InvalidState);
+        }
+
+        contract.client.require_auth();
+
+        let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
+
+        // Validate every requested index and amount before any transfer or state mutation.
+        let total_refund_amount =
+            refund_impl::validate_and_calculate_refund(&env, &milestones, &milestone_indices);
+
+        // Deadline checks remain part of the public entrypoint's compatibility contract.
+        for idx in milestone_indices.iter() {
+            let milestone = milestones.get(idx).unwrap();
+            if milestone.deadline.is_some()
+                && !Self::is_milestone_overdue(env.clone(), contract_id, idx)
+            {
+                env.panic_with_error(Error::MilestoneNotOverdue);
+            }
+        }
+
+        refund_impl::validate_refundable_balance(
+            &env,
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+            total_refund_amount,
+        );
+
+        let token = Self::read_settlement_token(&env)
+            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
+
+        // Mark milestones as refunded
+        for idx in milestone_indices.iter() {
+            let mut milestone = milestones.get(idx).unwrap();
+            milestone.refunded = true;
+            milestone.refunded_amount = milestone.amount;
+            milestones.set(idx, milestone);
+        }
+
+        contract.refunded_amount = contract
+            .refunded_amount
+            .checked_add(total_refund_amount)
+            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+
+        // Check if all unreleased milestones are refunded
+        let all_refunded_or_released = milestones.iter().all(|m| m.released || m.refunded);
+        if all_refunded_or_released {
+            let all_refunded = milestones.iter().all(|m| m.refunded);
+            if all_refunded {
+                contract.status = ContractStatus::Refunded;
+            } else {
+                // Some released, some refunded
+                contract.status = ContractStatus::Completed;
+                Self::grant_pending_reputation_credit(&env, &contract.freelancer);
+            }
+        }
+
+        ttl::store_milestones(&env, contract_id, &milestones);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+
+        if was_disputed {
+            rollback::clear_dispute_rollback(&env, contract_id);
+        }
+
+        // Extend TTL on contract write (milestone TTL already extended by store_milestones)
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        // Emit `refunded` event after all state mutations succeed.
+        //
+        // Topics : `(symbol_short!("refunded"), contract_id: u32)`
+        // Data   : `(total_refund_amount: i128, new_status: ContractStatus, timestamp: u64)`
+        env.events().publish(
+            (symbol_short!("refunded"), contract_id),
+            (
+                total_refund_amount,
+                contract.status,
+                env.ledger().timestamp(),
+            ),
+        );
+
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &contract.client,
+            &total_refund_amount,
+        );
+
+        total_refund_amount
     }
 
     // Checks whether a contract with the given ID exists in storage.
