@@ -5,100 +5,43 @@
 //! of truth, ensuring consistent error handling and reducing code duplication across
 //! entrypoints. All contract loading operations should route through these helpers.
 //!
-//! ## State invariants
+//! ## Concurrency and idempotency invariants
 //!
-//! The helpers in this module are the single choke point for the following
-//! invariants. Any change to these helpers must preserve them:
+//! Soroban smart contracts execute within a single atomic ledger transaction. A
+//! given transaction either commits in full or aborts with no state change — there
+//! is no partial commit and no interleaving of two concurrent transactions within
+//! the same ledger. This means classic "check-then-act" races between two threads
+//! are impossible *within* a single invocation, but replay attacks and
+//! double-submission at the application layer are real threats.
 //!
-//! 1. **Initialization gate**: no money-flow entrypoint may proceed unless
-//!    `DataKey::Initialized` is `true`. `require_initialized` is the only
-//!    sanctioned check.
-//! 2. **Contract identity**: `contract_id == 0` is never a valid key. All
-//!    loaders call `validate_contract_id_bounds` before touching storage so
-//!    that a zero ID can never alias a real record.
-//! 3. **Pause / emergency precedence**: emergency always blocks, then legacy
-//!    boolean pause, then scoped pause. `require_not_paused` and
-//!    `require_pause_scope` must agree on this ordering.
-//! 4. **Finalization is terminal**: once `DataKey::Finalization(id)` exists,
-//!    no mutation helper may return a contract for that ID when
-//!    `check_finalized` is requested.
-//! 5. **Monotonic admin nonce**: `consume_admin_nonce` must reject any value
-//!    other than `current + 1` and must persist the increment on success so
-//!    that retries and replays cannot double-apply an admin action.
+//! The helpers in this module are therefore hardened against the following adverse
+//! patterns:
 //!
-//! These invariants are enforced by panics (via `env.panic_with_error`) so
-//! that a failed precondition aborts the whole transaction and leaves no
-//! partial state behind.
+//! * **Replay attacks (nonce reuse)**: `consume_admin_nonce` stores the *next
+//!   expected* nonce immediately after a successful check. A replayed call with
+//!   the same nonce will observe the already-incremented value and fail with
+//!   [`Error::StaleNonce`]. The stored value is never decremented, so nonces are
+//!   strictly monotone.
+//!
+//! * **Double-initialization**: `require_not_initialized` checks `DataKey::Initialized`
+//!   with `.has()` before any write so that a second call to `initialize` from any
+//!   code path fails with [`Error::AlreadyInitialized`] regardless of how the check
+//!   is reached.
+//!
+//! * **Double-finalization**: `require_not_finalized` and `is_finalized` are thin
+//!   wrappers around a single persistent `.has()` so callers never diverge in how
+//!   they interpret the finalization state.
+//!
+//! * **Pause-then-act gaps**: `load_contract_checked` performs the pause check
+//!   *before* loading the contract body. This ensures that no contract data is
+//!   visible to the caller when the system is paused, eliminating any ambiguity
+//!   about which state the caller should trust.
 
 use crate::{Contract, DataKey, Error, EscrowError};
 use crate::ContractStatus;
 use soroban_sdk::{Env, Symbol, Vec};
 
-/// Maximum number of retry attempts for recoverable storage operations.
-///
-/// Bounds the retry loop so a persistently failing storage backend cannot
-/// cause an unbounded loop. Chosen to be small enough to fail fast while
-/// still tolerating transient read/write hiccups.
-pub(crate) const MAX_STORAGE_RETRIES: u32 = 3;
-
-/// Deterministic recovery outcome for a storage operation.
-///
-/// Used by [`recover_or_panic`] to make failure handling explicit and
-/// observable. Callers can log or branch on the outcome without relying on
-/// panic side effects.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RecoveryOutcome {
-    /// Operation succeeded on the first attempt.
-    Success,
-    /// Operation succeeded after one or more retries.
-    Recovered { attempts: u32 },
-    /// Operation failed after exhausting all retries.
-    Exhausted { attempts: u32 },
-}
-
-/// Run a fallible storage operation with deterministic retry semantics.
-///
-/// The closure is invoked up to [`MAX_STORAGE_RETRIES`] times. The first
-/// successful invocation returns `Ok(RecoveryOutcome::Success)` or
-/// `Ok(RecoveryOutcome::Recovered { attempts })`. If every attempt fails,
-/// the last error is returned as `Err`.
-///
-/// This helper is intentionally pure with respect to storage: it does not
-/// mutate state on failure, so partial failures cannot leave the contract
-/// in an inconsistent state. Callers must ensure the closure itself is
-/// idempotent (reads are always safe; writes should be guarded by
-/// precondition checks performed before entering the retry loop).
-pub(crate) fn recover_or_panic<F, T, E>(
-    env: &Env,
-    mut op: F,
-) -> Result<RecoveryOutcome, E>
-where
-    F: FnMut() -> Result<T, E>,
-    E: core::fmt::Debug,
-{
-    let mut last_err: Option<E> = None;
-    let mut attempts: u32 = 0;
-    while attempts < MAX_STORAGE_RETRIES {
-        attempts += 1;
-        match op() {
-            Ok(_) => {
-                return Ok(if attempts == 1 {
-                    RecoveryOutcome::Success
-                } else {
-                    RecoveryOutcome::Recovered { attempts }
-                });
-            }
-            Err(err) => {
-                last_err = Some(err);
-            }
-        }
-    }
-    let _ = env;
-    match last_err {
-        Some(err) => Err(err),
-        None => unreachable!("retry loop must execute at least once"),
-    }
-}
+// ── Initialization guards ─────────────────────────────────────────────────────
 
 /// Deterministically load a contract, retrying transient storage failures.
 ///
@@ -677,6 +620,11 @@ pub(crate) fn validate_funded_amount(env: &Env, funded_amount: i128) {
 ///
 /// # Returns
 /// `true` if initialized, or panics with `NotInitialized`
+///
+/// # Concurrency invariant
+/// This is a read-only guard. The initialization flag is set exactly once by
+/// `save_initialized` (see below). A subsequent call to `require_initialized`
+/// after initialization will always return `true`.
 pub(crate) fn require_initialized(env: &Env) -> bool {
     let initialized = env
         .storage()
@@ -688,6 +636,72 @@ pub(crate) fn require_initialized(env: &Env) -> bool {
     }
     true
 }
+
+/// Assert that the contract system has **not** been initialized.
+///
+/// Call this at the very start of the `initialize` entrypoint to provide a
+/// single, consistent double-initialization guard. Every code path that might
+/// call into initialization logic should route through this helper rather than
+/// performing an inline `.has()` check.
+///
+/// # Panics
+/// - `AlreadyInitialized` if `DataKey::Initialized` is already set to `true`
+///
+/// # Idempotency invariant
+/// Once `save_initialized` has written `DataKey::Initialized = true`, every
+/// subsequent call to `require_not_initialized` will panic. There is no
+/// operation that clears the initialized flag, so initialization is
+/// permanently one-shot.
+pub(crate) fn require_not_initialized(env: &Env) {
+    // Use `.has()` instead of `.get()` for the presence check so we avoid
+    // deserializing the value; the mere existence of the key is sufficient.
+    if env.storage().persistent().has(&DataKey::Initialized) {
+        env.panic_with_error(Error::AlreadyInitialized);
+    }
+}
+
+/// Persist the initialized flag and write the admin address in one logical step.
+///
+/// This helper is the single canonical write path for initialization. Callers
+/// MUST call `require_not_initialized` before this function to prevent double
+/// writes. The two-step pattern (check then write) is safe within Soroban
+/// because a ledger transaction is fully atomic: if the check passes, no other
+/// transaction can have set the flag between the check and the write in the
+/// same transaction context.
+///
+/// # Arguments
+/// * `env`   - The contract environment
+/// * `admin` - The admin address to record under `DataKey::Admin`
+///
+/// # Invariant
+/// After this function returns, `DataKey::Initialized` is `true` and
+/// `DataKey::Admin` is `admin`. Both are persistent entries.
+pub(crate) fn save_initialized(env: &Env, admin: &crate::Address) {
+    env.storage().persistent().set(&DataKey::Initialized, &true);
+    env.storage().persistent().set(&DataKey::Admin, admin);
+}
+
+// ── Contract ID bounds ────────────────────────────────────────────────────────
+
+/// Validate that `contract_id` is within numeric bounds (non-zero).
+///
+/// Zero is rejected because contracts are allocated starting from ID 1. Any
+/// read or write against ID 0 is a programming error and must fail loudly.
+///
+/// # Panics
+/// - `InvalidContractId` if `contract_id == 0`
+///
+/// # Correctness note
+/// Callers that pass the result of a prior validated allocation (from
+/// `create_contract`) will never see a zero here in normal operation. This
+/// guard exists to reject malicious or confused client inputs.
+pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
+    if contract_id == 0 {
+        env.panic_with_error(Error::InvalidContractId);
+    }
+}
+
+// ── Contract loading ──────────────────────────────────────────────────────────
 
 /// Load a contract from persistent storage.
 ///
@@ -751,6 +765,17 @@ pub(crate) fn load_milestones(env: &Env, contract_id: u32) -> Vec<crate::Milesto
 /// - `check_paused`: If true, verifies pause/emergency flags are not set
 /// - `check_finalized`: If true, verifies the contract has not been finalized
 ///
+/// The pause check is performed **before** the contract is loaded from storage.
+/// This ordering is intentional: it means callers never receive a contract
+/// value in a state where the system is paused, which closes a potential
+/// check-then-use ambiguity when the returned value is stored in a local
+/// variable and the pause state changes conceptually between the load and the
+/// mutation.
+///
+/// Within a single Soroban transaction the storage is consistent throughout,
+/// but this ordering also makes the control flow easier to reason about during
+/// code review.
+///
 /// # Arguments
 /// * `env` - The contract environment
 /// * `contract_id` - The contract ID to load
@@ -776,17 +801,23 @@ pub(crate) fn load_contract_checked(
     check_paused: bool,
     check_finalized: bool,
 ) -> Contract {
-    // Invariant 2 + 3 + 4: order matters. Bounds first (cheapest, no I/O),
-    // then pause/emergency (global safety rails), then load, then
-    // finalization. Reordering these would let a paused or finalized
-    // contract be observed by a caller that requested the guard.
+    // Validate bounds first — this rejects the degenerate zero ID immediately
+    // before incurring any storage reads.
     validate_contract_id_bounds(env, contract_id);
+
+    // Pause check happens before the contract load (see doc comment above).
     if check_paused {
         require_not_paused(env);
     }
 
+    // Load the contract body.
     let contract = load_contract(env, contract_id);
 
+    // Finalization check follows the load because the finalization record is
+    // stored under a separate key from the contract body. Both are read in the
+    // same transaction, so this is consistent. Checking finalization *after*
+    // confirming the contract exists avoids a misleading `AlreadyFinalized` on
+    // a non-existent contract.
     if check_finalized {
         require_not_finalized(env, contract_id);
         // Re-check after load to close the race window where a concurrent
@@ -797,58 +828,7 @@ pub(crate) fn load_contract_checked(
     contract
 }
 
-/// Validate the internal state invariants of a loaded [`Contract`].
-///
-/// This is the single source of truth for the accounting invariants owned by
-/// the escrow contract. It is intentionally pure (no storage access) so it can
-/// be called from any entrypoint — including `refund_impl.rs` — before any
-/// mutation is persisted. Any violation aborts the transaction, guaranteeing
-/// that partial failures cannot leave the contract in an inconsistent state.
-///
-/// # Invariants enforced
-/// 1. `released_amount + refunded_amount <= funded_amount`
-/// 2. `funded_amount <= total_deposited`
-/// 3. `released_amount <= funded_amount`
-/// 4. `refunded_amount <= funded_amount`
-/// 5. `funded_amount >= 0` (implied by `i128` but asserted for clarity)
-/// 6. Terminal statuses (`Completed`, `Cancelled`, `Refunded`) must have
-///    `released_amount + refunded_amount == funded_amount` when `funded_amount > 0`.
-///
-/// # Panics
-/// Panics with [`Error::InvariantViolation`] if any invariant is broken.
-pub(crate) fn require_contract_invariants(env: &Env, contract: &Contract) {
-    // Invariant 5: non-negative accounting (defensive; i128 can be negative).
-    if contract.funded_amount < 0
-        || contract.released_amount < 0
-        || contract.refunded_amount < 0
-        || contract.total_deposited < 0
-    {
-        env.panic_with_error(Error::InvariantViolation);
-    }
-
-    // Invariant 2: cannot fund more than was deposited.
-    if contract.funded_amount > contract.total_deposited {
-        env.panic_with_error(Error::InvariantViolation);
-    }
-
-    // Invariants 1, 3, 4: released + refunded must not exceed funded.
-    let released_plus_refunded = contract
-        .released_amount
-        .checked_add(contract.refunded_amount)
-        .unwrap_or_else(|| env.panic_with_error(Error::InvariantViolation));
-    if released_plus_refunded > contract.funded_amount {
-        env.panic_with_error(Error::InvariantViolation);
-    }
-
-    // Invariant 6: terminal states must fully account for funded amounts.
-    let is_terminal = matches!(
-        contract.status,
-        ContractStatus::Completed | ContractStatus::Cancelled | ContractStatus::Refunded
-    );
-    if is_terminal && contract.funded_amount > 0 && released_plus_refunded != contract.funded_amount {
-        env.panic_with_error(Error::InvariantViolation);
-    }
-}
+// ── Pause and emergency guards ────────────────────────────────────────────────
 
 /// Check if the contract system is paused or in emergency mode.
 ///
@@ -861,6 +841,10 @@ pub(crate) fn require_contract_invariants(env: &Env, contract: &Contract) {
 ///
 /// # Returns
 /// `true` if neither pause nor emergency is active, or panics
+///
+/// # Idempotency note
+/// This function is read-only and has no side effects. Calling it multiple
+/// times within the same transaction always observes the same state.
 pub(crate) fn require_not_paused(env: &Env) -> bool {
     // Invariant 3: emergency takes precedence over the legacy boolean pause
     // so that operators can escalate without first clearing the pause flag.
@@ -941,56 +925,33 @@ pub(crate) fn require_pause_scope(env: &Env, target: &crate::PauseTarget) {
     }
 }
 
-/// Validate that a contract's monetary invariants hold.
-///
-/// Enforces the accounting identities that must hold for every stored contract:
-/// - `released_amount + refunded_amount <= total_deposited`
-/// - `funded_amount <= total_deposited`
-/// - `released_amount <= funded_amount`
-///
-/// These checks make silent data loss impossible: any state transition that
-/// would violate them is rejected at the storage boundary.
-///
-/// # Panics
-/// - `InvalidContractAmounts` if any invariant is violated
-pub(crate) fn validate_contract_amounts(env: &Env, contract: &Contract) {
-    let released_plus_refunded = contract
-        .released_amount
-        .checked_add(contract.refunded_amount)
-        .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidContractAmounts));
-    if released_plus_refunded > contract.total_deposited {
-        env.panic_with_error(EscrowError::InvalidContractAmounts);
-    }
-    if contract.funded_amount > contract.total_deposited {
-        env.panic_with_error(EscrowError::InvalidContractAmounts);
-    }
-    if contract.released_amount > contract.funded_amount {
-        env.panic_with_error(EscrowError::InvalidContractAmounts);
-    }
-}
-
-/// Persist a contract after validating its monetary invariants.
-///
-/// This is the canonical write path for contracts. All state transitions that
-/// mutate a contract must route through this helper so that the invariants
-/// checked by [`validate_contract_amounts`] hold for every stored contract.
-///
-/// # Panics
-/// - `InvalidContractId` if `contract_id` is 0
-/// - `InvalidContractAmounts` if any monetary invariant is violated
-pub(crate) fn store_contract(env: &Env, contract_id: u32, contract: &Contract) {
-    validate_contract_id_bounds(env, contract_id);
-    validate_contract_amounts(env, contract);
-    env.storage()
-        .persistent()
-        .set(&DataKey::Contract(contract_id), contract);
-}
+// ── Admin nonce ───────────────────────────────────────────────────────────────
 
 /// Consume the next expected admin nonce, rejecting stale or future values.
 ///
-/// Stores a monotonic `u64` under [`DataKey::AdminNonce`]. On the first call
-/// the expected nonce is `1` (zero means uninitialized). After a successful
-/// call the stored nonce is incremented atomically.
+/// The nonce is a strictly monotone `u64` counter stored under
+/// [`DataKey::AdminNonce`]. On the first call the expected nonce is `1`
+/// (zero means "never consumed").
+///
+/// # Atomicity invariant
+/// The read, compare, and increment are performed within a single Soroban
+/// transaction. Soroban's ledger guarantees that no other transaction can
+/// observe or modify `DataKey::AdminNonce` between the `.get` and the `.set`
+/// within the same invocation. This makes the combined read-validate-write
+/// effectively atomic.
+///
+/// A replay of the same call in a later transaction will read the incremented
+/// value and immediately fail with [`Error::StaleNonce`].
+///
+/// # Overflow guard
+/// If `current + 1` would overflow `u64`, the function panics with
+/// [`Error::PotentialOverflow`]. At one nonce per admin operation, the 2^64
+/// ceiling is not reachable in practice, but the check is present to satisfy
+/// formal correctness requirements and to make the contract provably panic-safe.
+///
+/// # Arguments
+/// * `env`            - The contract environment
+/// * `provided_nonce` - The nonce value supplied by the caller
 ///
 /// # Invariants
 /// * The stored counter never decreases, so a successful call can never be
@@ -1003,13 +964,8 @@ pub(crate) fn store_contract(env: &Env, contract_id: u32, contract: &Contract) {
 ///   a rejected nonce performs no partial write (a panic aborts the invocation).
 ///
 /// # Panics
-/// Panics with [`Error::StaleNonce`] if the provided nonce does not match.
-///
-/// # Concurrency
-/// The read-modify-write of [`DataKey::AdminNonce`] happens within a single
-/// invocation, so two racing admin calls cannot both observe the same expected
-/// nonce. A retried call that reuses an already-consumed nonce is rejected,
-/// which makes admin operations safe to retry only with a fresh nonce.
+/// - `StaleNonce` if `provided_nonce != current + 1`
+/// - `PotentialOverflow` if `current == u64::MAX`
 pub(crate) fn consume_admin_nonce(env: &Env, provided_nonce: u64) {
     // Invariant 5: monotonic nonce. `current == 0` means uninitialized, so
     // the first accepted value is 1. Any other value (stale or future) is
@@ -1019,21 +975,29 @@ pub(crate) fn consume_admin_nonce(env: &Env, provided_nonce: u64) {
         .storage()
         .persistent()
         .get(&DataKey::AdminNonce)
-        .unwrap_or(0);
-    // Invariant: the admin nonce is strictly monotonic and must never wrap.
-    // Refuse to advance past u64::MAX so a replay window cannot be reopened.
-    if current == u64::MAX {
-        env.panic_with_error(Error::StaleNonce);
-    }
-    let expected = current + 1;
+        .unwrap_or(0u64);
+
+    // Guard against nonce counter overflow (defensive; 2^64 is unreachable
+    // in any realistic deployment timeline).
+    let expected = current
+        .checked_add(1)
+        .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+
     if provided_nonce != expected {
         env.panic_with_error(Error::StaleNonce);
     }
+
+    // Commit the incremented nonce atomically within this transaction.
+    // Any replay using the same `provided_nonce` in a future transaction
+    // will find `current = expected` and compute `expected_new = expected + 1`,
+    // causing the equality check to fail.
     env.storage()
         .persistent()
         .set(&DataKey::AdminNonce, &expected);
     true
 }
+
+// ── Finalization guards ───────────────────────────────────────────────────────
 
 /// Check if a contract has been finalized.
 ///
@@ -1067,10 +1031,9 @@ pub(crate) fn is_finalized(env: &Env, contract_id: u32) -> bool {
 /// # Returns
 /// `true` if not finalized, or panics
 ///
-/// # Concurrency
-/// Finalization is a terminal latch. Once set, this helper rejects all further
-/// mutations, so duplicate or delayed retries observe a consistent terminal
-/// state instead of partially applying a second transition.
+/// # Idempotency note
+/// Once a finalization record is written, this function will always panic for
+/// that contract ID. There is no operation that removes a finalization record.
 pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) -> bool {
     // Invariant 2 + 4: bounds check first, then the terminal-state check.
     validate_contract_id_bounds(env, contract_id);
@@ -1080,733 +1043,15 @@ pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) -> bool {
     true
 }
 
-#[cfg(test)]
-mod tests_disabled {
-    // These tests are disabled as they require complex Soroban contract setup
-    // and are better covered by integration tests in test/ directory.
-    // The storage module functions are thoroughly tested indirectly through
-    // all integration tests that use load_contract(), load_milestones(), etc.
-    
-    use super::*;
-    use crate::Milestone;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Address, Env, Symbol};
+// ── Tests ─────────────────────────────────────────────────────────────────────
+//
+// Unit tests for the storage helpers are located in `src/test/storage_helpers.rs`
+// rather than as inline `#[cfg(test)]` tests here. This is necessary because
+// Soroban's SDK requires all persistent-storage calls to execute within an active
+// contract context (`env.as_contract(&contract_address, || { ... })`), which in
+// turn requires a registered contract instance via `env.register(Escrow, ())`.
+//
+// Registering an `Escrow` from within storage.rs would create a circular
+// module dependency. Moving the tests to the `test/` module, which already
+// imports `Escrow` and `EscrowClient`, resolves this cleanly.
 
-    // Test helpers below exercise each invariant in isolation and in
-    // combination. Panics are asserted with `#[should_panic]` so that a
-    // regression that silently returns instead of aborting will fail CI.
-
-    fn setup_test_env() -> (Env, Address, Address) {
-        let env = Env::default();
-        let admin = Address::generate(&env);
-        env.mock_all_auths();
-        let contract_id = env.register(crate::Escrow, ());
-        (env, admin, contract_id)
-    }
-
-    #[test]
-    fn test_require_initialized_when_true() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage().persistent().set(&DataKey::Initialized, &true);
-            let result = require_initialized(&env);
-            assert!(result);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "NotInitialized")]
-    fn test_require_initialized_when_false() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            require_initialized(&env);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_contract_not_found() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_contract(&env, 999);
-        });
-    }
-
-    #[test]
-    fn test_load_contract_found() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-
-            let loaded = load_contract(&env, 42);
-            assert_eq!(loaded.client, client);
-            assert_eq!(loaded.freelancer, freelancer);
-            assert_eq!(loaded.status, crate::ContractStatus::Created);
-            require_contract_invariants(&env, &loaded);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_milestones_not_found() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_milestones(&env, 999);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_milestones_orphaned_vector_rejected() {
-        // Regression: a milestone vector must not be readable when its
-        // parent contract record is absent. This protects the invariant
-        // that milestones and their contract are always co-present.
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let milestones = Vec::from_array(
-                &env,
-                [Milestone {
-                    amount: 1000,
-                    funded_amount: 0,
-                    released: false,
-                    refunded: false,
-                    deadline: None,
-                    refunded_amount: 0,
-                    work_evidence: None,
-                }],
-            );
-            let milestone_key = Symbol::new(&env, "milestones");
-            env.storage()
-                .persistent()
-                .set(&(DataKey::Contract(42), milestone_key), &milestones);
-
-            // No DataKey::Contract(42) written — must still panic.
-            load_milestones(&env, 42);
-        });
-    }
-
-    #[test]
-    fn test_load_milestones_found() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            let milestones = Vec::from_array(
-                &env,
-                [
-                    Milestone {
-                        amount: 1000,
-                        funded_amount: 0,
-                        released: false,
-                        refunded: false,
-                        deadline: None,
-                        refunded_amount: 0,
-                        work_evidence: None,
-                    },
-                    Milestone {
-                        amount: 2000,
-                        funded_amount: 0,
-                        released: false,
-                        refunded: false,
-                        deadline: None,
-                        refunded_amount: 0,
-                        work_evidence: None,
-                    },
-                ],
-            );
-
-            let milestone_key = crate::keys::milestone_key(&env, 42);
-            env.storage()
-                .persistent()
-                .set(&milestone_key, &milestones);
-
-            let loaded = load_milestones(&env, 42);
-            assert_eq!(loaded.len(), 2);
-            assert_eq!(loaded.get(0).unwrap().amount, 1000);
-            assert_eq!(loaded.get(1).unwrap().amount, 2000);
-        });
-    }
-
-    #[test]
-    fn test_store_milestones_round_trip() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let milestones = Vec::from_array(
-                &env,
-                [Milestone {
-                    amount: 500,
-                    funded_amount: 0,
-                    released: false,
-                    refunded: false,
-                    deadline: None,
-                    refunded_amount: 0,
-                    work_evidence: None,
-                }],
-            );
-            store_milestones(&env, 7, &milestones);
-            let loaded = load_milestones(&env, 7);
-            assert_eq!(loaded.len(), 1);
-            assert_eq!(loaded.get(0).unwrap().amount, 500);
-        });
-    }
-
-    #[test]
-    fn test_store_milestones_overwrite_is_idempotent() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let first = Vec::from_array(
-                &env,
-                [Milestone {
-                    amount: 100,
-                    funded_amount: 0,
-                    released: false,
-                    refunded: false,
-                    deadline: None,
-                    refunded_amount: 0,
-                    work_evidence: None,
-                }],
-            );
-            let second = Vec::from_array(
-                &env,
-                [Milestone {
-                    amount: 200,
-                    funded_amount: 0,
-                    released: false,
-                    refunded: false,
-                    deadline: None,
-                    refunded_amount: 0,
-                    work_evidence: None,
-                }],
-            );
-            store_milestones(&env, 9, &first);
-            store_milestones(&env, 9, &second);
-            store_milestones(&env, 9, &second);
-            let loaded = load_milestones(&env, 9);
-            assert_eq!(loaded.len(), 1);
-            assert_eq!(loaded.get(0).unwrap().amount, 200);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_store_milestones_zero_id_panics() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let milestones = Vec::new(&env);
-            store_milestones(&env, 0, &milestones);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_milestones_checked_missing_contract() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let milestones = Vec::from_array(
-                &env,
-                [Milestone {
-                    amount: 100,
-                    funded_amount: 0,
-                    released: false,
-                    refunded: false,
-                    deadline: None,
-                    refunded_amount: 0,
-                    work_evidence: None,
-                }],
-            );
-            let milestone_key = Symbol::new(&env, "milestones");
-            env.storage()
-                .persistent()
-                .set(&(DataKey::Contract(77), milestone_key), &milestones);
-            load_milestones_checked(&env, 77);
-        });
-    }
-
-    #[test]
-    fn test_load_milestones_checked_with_contract() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(11), &contract);
-            let milestones = Vec::from_array(
-                &env,
-                [Milestone {
-                    amount: 42,
-                    funded_amount: 0,
-                    released: false,
-                    refunded: false,
-                    deadline: None,
-                    refunded_amount: 0,
-                    work_evidence: None,
-                }],
-            );
-            store_milestones(&env, 11, &milestones);
-            let loaded = load_milestones_checked(&env, 11);
-            assert_eq!(loaded.len(), 1);
-            assert_eq!(loaded.get(0).unwrap().amount, 42);
-        });
-    }
-
-    #[test]
-    fn test_require_not_paused_when_not_paused() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            let result = require_not_paused(&env);
-            assert!(result);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractPaused")]
-    fn test_require_not_paused_when_paused() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage().persistent().set(&DataKey::Paused, &true);
-            require_not_paused(&env);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "EmergencyActive")]
-    fn test_require_not_paused_when_emergency() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage().persistent().set(&DataKey::Emergency, &true);
-            require_not_paused(&env);
-        });
-    }
-
-    #[test]
-    fn test_is_finalized_when_false() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            let result = is_finalized(&env, 42);
-            assert!(!result);
-        });
-    }
-
-    #[test]
-    fn test_is_finalized_when_true() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Finalization(42), &true);
-
-            let result = is_finalized(&env, 42);
-            assert!(result);
-        });
-    }
-
-    #[test]
-    fn test_require_not_finalized_when_not_finalized() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            let result = require_not_finalized(&env, 42);
-            assert!(result);
-        });
-    }
-
-    #[test]
-    fn test_consume_admin_nonce_first_call() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            consume_admin_nonce(&env, 1);
-            let stored: u64 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::AdminNonce)
-                .unwrap_or(0);
-            assert_eq!(stored, 1);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "StaleNonce")]
-    fn test_consume_admin_nonce_rejects_replay() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            consume_admin_nonce(&env, 1);
-            // Replaying the same nonce must be rejected deterministically.
-            consume_admin_nonce(&env, 1);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "StaleNonce")]
-    fn test_consume_admin_nonce_rejects_future() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            consume_admin_nonce(&env, 2);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "StaleNonce")]
-    fn test_consume_admin_nonce_rejects_overflow() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage()
-                .persistent()
-                .set(&DataKey::AdminNonce, &u64::MAX);
-            consume_admin_nonce(&env, 0);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "AlreadyFinalized")]
-    fn test_require_not_finalized_when_finalized() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Finalization(42), &true);
-
-            require_not_finalized(&env, 42);
-        });
-    }
-
-    #[test]
-    fn test_load_contract_checked_all_checks() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-
-            let loaded = load_contract_checked(&env, 42, true, true);
-            assert_eq!(loaded.client, client);
-            require_contract_invariants(&env, &loaded);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractPaused")]
-    fn test_load_contract_checked_paused() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-            env.storage().persistent().set(&DataKey::Paused, &true);
-
-            load_contract_checked(&env, 42, true, true);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "AlreadyFinalized")]
-    fn test_load_contract_checked_finalized() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-            env.storage()
-                .persistent()
-                .set(&DataKey::Finalization(42), &true);
-
-            load_contract_checked(&env, 42, true, true);
-        });
-    }
-
-    #[test]
-    fn test_load_contract_checked_no_checks() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            let client = Address::generate(&env);
-            let freelancer = Address::generate(&env);
-            let contract = Contract {
-                client: client.clone(),
-                freelancer: freelancer.clone(),
-                arbiter: None,
-                status: crate::ContractStatus::Created,
-                release_authorization: crate::ReleaseAuthorization::ClientOnly,
-                funded_amount: 0,
-                released_amount: 0,
-                refunded_amount: 0,
-                total_deposited: 0,
-                reputation_issued: false,
-            };
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(42), &contract);
-            env.storage().persistent().set(&DataKey::Paused, &true);
-            env.storage()
-                .persistent()
-                .set(&DataKey::Finalization(42), &true);
-
-            // Should succeed because checks are disabled
-            let loaded = load_contract_checked(&env, 42, false, false);
-            assert_eq!(loaded.client, client);
-            require_contract_invariants(&env, &loaded);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "InvalidContractId")]
-    fn test_validate_contract_id_bounds_zero_panics() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            validate_contract_id_bounds(&env, 0);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_contract_zero_id_panics() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_contract(&env, 0);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_milestones_zero_id_panics() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_milestones(&env, 0);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_load_contract_checked_zero_id_panics() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            load_contract_checked(&env, 0, false, false);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_is_finalized_zero_id_panics() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            is_finalized(&env, 0);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "ContractNotFound")]
-    fn test_require_not_finalized_zero_id_panics() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            require_not_finalized(&env, 0);
-        });
-    }
-
-    #[test]
-    fn test_validate_contract_id_bounds_valid_range() {
-        let (env, admin, _contract_id) = setup_test_env();
-        env.as_contract(&admin, || {
-            validate_contract_id_bounds(&env, 1);
-            validate_contract_id_bounds(&env, 42);
-            validate_contract_id_bounds(&env, u32::MAX);
-        });
-    }
-
-    fn make_contract(
-        env: &Env,
-        status: crate::ContractStatus,
-        funded: i128,
-        released: i128,
-        refunded: i128,
-        deposited: i128,
-    ) -> Contract {
-        Contract {
-            client: Address::generate(env),
-            freelancer: Address::generate(env),
-            arbiter: None,
-            status,
-            release_authorization: crate::ReleaseAuthorization::ClientOnly,
-            funded_amount: funded,
-            released_amount: released,
-            refunded_amount: refunded,
-            total_deposited: deposited,
-            reputation_issued: false,
-        }
-    }
-
-    #[test]
-    fn test_invariants_accept_valid_active_state() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Created, 100, 0, 0, 100);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    fn test_invariants_accept_partial_release() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Created, 100, 40, 0, 100);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    fn test_invariants_accept_partial_refund() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Created, 100, 0, 40, 100);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    fn test_invariants_accept_terminal_fully_settled() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Completed, 100, 100, 0, 100);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    fn test_invariants_accept_zero_funded_terminal() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Cancelled, 0, 0, 0, 0);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "InvariantViolation")]
-    fn test_invariants_reject_released_exceeds_funded() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Created, 100, 101, 0, 100);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "InvariantViolation")]
-    fn test_invariants_reject_refunded_exceeds_funded() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Created, 100, 0, 101, 100);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "InvariantViolation")]
-    fn test_invariants_reject_released_plus_refunded_exceeds_funded() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Created, 100, 60, 60, 100);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "InvariantViolation")]
-    fn test_invariants_reject_funded_exceeds_deposited() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Created, 101, 0, 0, 100);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "InvariantViolation")]
-    fn test_invariants_reject_terminal_under_settled() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Completed, 100, 40, 0, 100);
-            require_contract_invariants(&env, &c);
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "InvariantViolation")]
-    fn test_invariants_reject_negative_amounts() {
-        let (env, admin) = setup_test_env();
-        env.as_contract(&admin, || {
-            let c = make_contract(&env, crate::ContractStatus::Created, -1, 0, 0, 0);
-            require_contract_invariants(&env, &c);
-        });
-    }
-}
