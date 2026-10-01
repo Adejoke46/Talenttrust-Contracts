@@ -55,6 +55,8 @@ The canonical definition lives in [`contracts/escrow/src/lib.rs`](../contracts/e
 | 43 | `CommentTooLong` | 43 |
 | 44 | `InvalidProtocolParameters` | 44 |
 | 45 | `InvalidWithdrawalAmount` | 45 |
+| 84 | `StaleMilestoneVersion` | 84 |
+| 85 | `InvalidVersionCount` | 85 |
 
 ---
 
@@ -510,6 +512,26 @@ The canonical definition lives in [`contracts/escrow/src/lib.rs`](../contracts/e
 **How to avoid:** Only withdraw positive amounts at or below any per-operation cap. Check accumulated fees with `get_accumulated_fees` first.
 
 **Entrypoints:** `withdraw_protocol_fees`
+
+---
+
+### `StaleMilestoneVersion` (84)
+
+**When it fires:** A version-aware milestone release, batch release, or refund supplies a version that no longer matches the stored milestone version.
+
+**How to avoid:** Read `get_milestone_version` for each affected milestone and submit those versions to the corresponding version-aware entrypoint. A successful release or refund increments the affected version atomically.
+
+**Entrypoints:** `release_milestone_with_version`, `release_batch_v`, `refund_milestones_with_versions`
+
+---
+
+### `InvalidVersionCount` (85)
+
+**When it fires:** A version-aware batch release or refund supplies a version vector whose length differs from its milestone-index vector.
+
+**How to avoid:** Supply exactly one expected version for each milestone index, in the same order.
+
+**Entrypoints:** `release_batch_v`, `refund_milestones_with_versions`
 
 ---
 
