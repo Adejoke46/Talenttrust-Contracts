@@ -341,12 +341,15 @@ fn migration_blocked_on_cancelled_contract() {
 fn migration_blocked_on_refunded_contract() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = register_client(&env);
+    // deposit_funds requires a bound settlement token.
+    let (client, token) = super::register_client_with_token(&env);
 
     let (client_addr, _freelancer_addr, id) = create_contract(&env, &client);
     let new_client = Address::generate(&env);
 
-    client.deposit_funds(&id, &client_addr, &total_milestone_amount());
+    let total = total_milestone_amount();
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&client_addr, &total);
+    client.deposit_funds(&id, &client_addr, &total);
     let all_indices = soroban_sdk::vec![&env, 0u32, 1u32, 2u32];
     client.refund_unreleased_milestones(&id, &all_indices);
     assert_eq!(client.get_contract(&id).status, ContractStatus::Refunded);
@@ -535,11 +538,14 @@ fn migration_allowed_on_created_status() {
 fn migration_allowed_on_partially_funded_status() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = register_client(&env);
+    // deposit_funds requires a bound settlement token.
+    let (client, token) = super::register_client_with_token(&env);
 
     let (client_addr, _freelancer_addr, id) = create_contract(&env, &client);
 
     // Deposit less than the full milestone total → PartiallyFunded
+    soroban_sdk::token::StellarAssetClient::new(&env, &token)
+        .mint(&client_addr, &super::MILESTONE_ONE);
     client.deposit_funds(&id, &client_addr, &super::MILESTONE_ONE);
     assert_eq!(
         client.get_contract(&id).status,
@@ -555,10 +561,13 @@ fn migration_allowed_on_partially_funded_status() {
 fn migration_allowed_on_funded_status() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = register_client(&env);
+    // deposit_funds requires a bound settlement token.
+    let (client, token) = super::register_client_with_token(&env);
 
     let (client_addr, _freelancer_addr, id) = create_contract(&env, &client);
-    client.deposit_funds(&id, &client_addr, &total_milestone_amount());
+    let total = total_milestone_amount();
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&client_addr, &total);
+    client.deposit_funds(&id, &client_addr, &total);
     assert_eq!(client.get_contract(&id).status, ContractStatus::Funded);
 
     let new_client = Address::generate(&env);
