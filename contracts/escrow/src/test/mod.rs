@@ -65,7 +65,7 @@ mod simulate_create_contract;
 mod simulate_deposit;
 mod simulate_refund;
 mod simulate_release;
-mod simulate_validation_boundaries;
+mod storage_validation_compat;
 mod token_scale;
 mod ttl_tests;
 mod simple_amount_test;
