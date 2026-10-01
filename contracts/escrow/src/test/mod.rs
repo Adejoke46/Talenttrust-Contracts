@@ -45,6 +45,7 @@ mod persistence;
 #[path = "../proptest.rs"]
 mod proptest;
 mod refund;
+mod refund_validation_boundaries;
 mod release;
 mod release_authorization;
 mod reputation;
