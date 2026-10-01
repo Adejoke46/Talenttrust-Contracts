@@ -82,6 +82,7 @@ mod migration;
 mod milestone_transitions;
 mod milestones;
 pub mod milestones_consts;
+pub mod validation_boundaries;
 mod refund_impl;
 mod release;
 mod reputation;
