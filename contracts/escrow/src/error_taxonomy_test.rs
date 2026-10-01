@@ -1,11 +1,32 @@
-#![cfg(test)]
+#`!cfg(test)]
 
-use crate::types::{DataKey, Error, ReleaseAuthorization};
+use crate::types:{DataKey, Error, ReleaseAuthorization};
 use crate::{Escrow, EscrowClient, MAX_MILESTONES};
 use soroban_sdk::{
-    testutils::{Address as _, Events},
+    testutils:{Address as _, Events},
     vec, Address, Env, IntoVal, Symbol, Vec,
 };
+
+// -----------------------------------------------------------------------------
+// State invariants under test in this module:
+//
+//  I1. initialize is one-way: after the first call the admin key is set and
+//      any further initialize attempt must fail without mutating state.
+//  I2. A contract id must exist before any state-transition attempts against it.
+//  I3. Participants must be distinct; milestones must be non-empty, positive,
+//      and within MAX_MILESTONES.
+//  I4. Only the authorized role may drive a transition (deposit/release).
+//  I5. Milestone indexes are bounded by the contract's milestone count.
+//  I6. Protocol parameters are bounded (0 <= fee_bps <= 10_000).
+//
+// Each test below asserts that an invalid operation fails AND that the
+// failure does not silently corrupt state. Where the public API exposes a
+// readable view, we verify the post-failure state explicitly.
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// I1: initialization invariant
+// -----------------------------------------------------------------------------
 
 #[test]
 fn test_error_already_initialized_on_double_init() {
@@ -17,10 +38,19 @@ fn test_error_already_initialized_on_double_init() {
     let admin = Address::generate(&env);
     assert!(client.initialize(&admin));
 
-    // Second initialization attempt must fail
-    let res = client.try_initialize(&admin);
-    assert!(res.is_err());
+    // Second initialization attempt must fail and must not change the admin.
+    let other = Address::generate(&env);
+    let res = client.try_initialize(&other);
+    assert!(res.is_error());
+
+    // State invariant: the original admin remains authority. A new contract
+// is not created by the failed init, and the admin can still act.
+    assert!(client.set_protocol_fee_bps(&admin, &100u64));
 }
+
+// -----------------------------------------------------------------------------
+// I2: unknown contract id
+// -----------------------------------------------------------------------------
 
 #[test]
 fn test_error_contract_not_found_on_unknown_id() {
@@ -35,8 +65,12 @@ fn test_error_contract_not_found_on_unknown_id() {
     let caller = Address::generate(&env);
     // Non-existent contract ID 9999
     let res = client.try_release_milestone(&9999, &caller, &0);
-    assert!(res.is_err());
+    assert!(res.is_error());
 }
+
+// -----------------------------------------------------------------------------
+// I3: participant and milestone validation
+// -----------------------------------------------------------------------------
 
 #[test]
 fn test_error_invalid_participants_same_client_and_freelancer() {
@@ -60,7 +94,11 @@ fn test_error_invalid_participants_same_client_and_freelancer() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(res.is_err());
+    assert!(res.is_error());
+
+    // Regression: the failed create must not have left a contract at id 0.
+    let attacker = Address::generate(&env);
+    assert!(client.try_deposit_funds(&0, &attacker, &1_000).is_error());
 }
 
 #[test]
@@ -84,7 +122,7 @@ fn test_error_empty_milestones_rejected() {
         &empty_milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(res.is_err());
+    assert!(res.is_error());
 }
 
 #[test]
@@ -110,7 +148,7 @@ fn test_error_invalid_milestone_amount_negative_or_zero() {
         &zero_milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(res_zero.is_err());
+    assert!(res_zero.is_error());
 
     let mut neg_milestones = Vec::new(&env);
     neg_milestones.push_back(-500i128);
@@ -122,7 +160,7 @@ fn test_error_invalid_milestone_amount_negative_or_zero() {
         &neg_milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(res_neg.is_err());
+    assert!(res_neg.is_error());
 }
 
 #[test]
@@ -150,8 +188,12 @@ fn test_error_too_many_milestones_exceeds_cap() {
         &too_many,
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(res.is_err());
+    assert!(res.is_error());
 }
+
+// -----------------------------------------------------------------------------
+// I4: authorization invariant
+// -----------------------------------------------------------------------------
 
 #[test]
 fn test_error_unauthorized_role_rejected() {
@@ -180,8 +222,16 @@ fn test_error_unauthorized_role_rejected() {
 
     // Attacker tries to deposit
     let res = client.try_deposit_funds(&c_id, &attacker, &1_000);
-    assert!(res.is_err());
+    assert!(res.is_error());
+
+    // Invariant: the failed deposit must not have funded the contract. The
+    // legitimate client can still deposit the expected amount.
+    assert!(client.deposit_funds(&c_id, &client_addr, &milestones.get(0).unwrap()));
 }
+
+// -----------------------------------------------------------------------------
+// I5: milestone index bounds
+// -----------------------------------------------------------------------------
 
 #[test]
 fn test_error_index_out_of_bounds_on_milestone_release() {
@@ -210,8 +260,16 @@ fn test_error_index_out_of_bounds_on_milestone_release() {
 
     // Release index 10 (only index 0 exists)
     let res = client.try_release_milestone(&c_id, &client_addr, &10);
-    assert!(res.is_err());
+    assert!(res.is_error());
+
+    // Invariant: the failed release must not have consumed the valid milestone.
+    // The legitimate index 0 remains releasable.
+    assert!(client.release_milestone(&c_id, &client_addr, &0));
 }
+
+// -----------------------------------------------------------------------------
+// I6: protocol parameter bounds
+// -----------------------------------------------------------------------------
 
 #[test]
 fn test_error_invalid_protocol_parameters_out_of_bounds_fee() {
@@ -225,5 +283,8 @@ fn test_error_invalid_protocol_parameters_out_of_bounds_fee() {
 
     // Fee > 10,000 bps (100%)
     let res = client.try_set_protocol_fee_bps(&10_001, &1u64);
-    assert!(res.is_err());
+    assert!(res.is_error());
+
+    // Boundary: exactly 10_000 is accepted and must not be rejected.
+    assert!(client.set_protocol_fee_bps(&admin, &10_000u64));
 }

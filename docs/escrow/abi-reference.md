@@ -72,9 +72,9 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Signature: `finalize_contract(env: Env, contract_id: u32, finalizer: Address) -> bool`
 - Kind: Mutating
 - Auth: `finalizer.require_auth()`
-- Semantics: Writes an immutable finalization record for a contract already in `Completed` or `Disputed` state. Prevents later contract-specific mutations.
-- Events: `("finalized", contract_id)`
-- Errors: `ContractPaused`, `EmergencyActive`, `ContractNotFound`, `AlreadyFinalized`, `UnauthorizedRole`, `InvalidStatusTransition`
+- Semantics: Writes an immutable finalization record for a contract already in `Completed` or `Disputed` state. The close summary is fully validated before anything is written, so a rejected call leaves the contract unfinalized, mutable and retryable. Prevents later contract-specific mutations.
+- Events: `("finalized", contract_id)` with payload `(finalizer, timestamp, summary)`
+- Errors: `ContractPaused`, `EmergencyActive`, `ContractNotFound`, `AlreadyFinalized`, `UnauthorizedRole`, `InvalidStatusTransition`, `FinalizationStateIncomplete`, `AccountingInvariantViolated`, `PotentialOverflow`
 
 ### get_finalization_record
 
@@ -127,8 +127,17 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Kind: Mutating
 - Auth: `caller.require_auth()`
 - Semantics: Stores a milestone approval record for the caller. The approval is temporary and expires according to the configured TTL.
-- Events: None (approval records are stored in temporary storage)
+- Events: `("mlstn_app", contract_id)` with `(milestone_index, caller, timestamp)`
 - Errors: `ContractNotFound`, `AlreadyFinalized`, `InvalidState`, `IndexOutOfBounds`, `AlreadyApproved`, `InsufficientApprovals`, `ApprovalExpired` (if the implementation surface uses it), `UnauthorizedRole`
+
+### revoke_milestone_approval
+
+- Signature: `revoke_milestone_approval(env: Env, contract_id: u32, caller: Address, milestone_index: u32) -> bool`
+- Kind: Mutating
+- Auth: `caller.require_auth()`
+- Semantics: Removes only the caller's approval from an unreleased milestone. Other participants' approvals remain; an empty record is removed.
+- Events: `("revoked",)` with `(contract_id, milestone_index, caller)`
+- Errors: `ContractPaused`, `EmergencyActive`, `AlreadyFinalized`, `ContractNotFound`, `IndexOutOfBounds`, `MilestoneAlreadyReleased`, `UnauthorizedRole`, `InsufficientApprovals`
 
 ### release_milestone
 
@@ -139,14 +148,41 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Events: `("mlstn_rls", contract_id)`, and `("ctrct_cmp", contract_id)` when the contract reaches `Completed`
 - Errors: `ContractNotFound`, `InvalidState`, `IndexOutOfBounds`, `MilestoneAlreadyReleased`, `AlreadyRefunded`, `InsufficientFunds`, `UnauthorizedRole`, `NotInitialized`, `ContractPaused`, `EmergencyActive`, `AlreadyFinalized`
 
+### release_milestone_with_version
+
+- Signature: `release_milestone_with_version(env: Env, contract_id: u32, caller: Address, milestone_index: u32, expected_version: u32) -> bool`
+- Kind: Mutating
+- Auth: `caller.require_auth()`
+- Semantics: Same release operation as `release_milestone`, but rejects with `StaleMilestoneVersion` unless the milestone's current optimistic version equals `expected_version`. The version increments atomically on successful release. Call `get_milestone_version` before the operation. The original entrypoint remains supported for existing clients.
+- Events: Same `mlstn_rls` and optional `ctrct_cmp` events as `release_milestone`.
+- Errors: Same as `release_milestone`, plus `StaleMilestoneVersion`.
+
+### release_batch_v
+
+- Signature: `release_batch_v(env: Env, contract_id: u32, caller: Address, milestone_indices: Vec<u32>, expected_versions: Vec<u32>) -> bool`
+- Kind: Mutating
+- Auth: `caller.require_auth()`
+- Semantics: Same all-or-nothing release as `release_milestone_batch`; `expected_versions` must have the same length and positional ordering as `milestone_indices`. Every version is validated before any state mutation or transfer. Each released milestone's version increments atomically. The original batch entrypoint remains supported.
+- Events: Same per-milestone `mlstn_rls` and optional `ctrct_cmp` events as `release_milestone_batch`.
+- Errors: Same as `release_milestone_batch`, plus `StaleMilestoneVersion` and `InvalidVersionCount`.
+
 ### refund_unreleased_milestones
 
 - Signature: `refund_unreleased_milestones(env: Env, contract_id: u32, milestone_indices: Vec<u32>) -> i128`
 - Kind: Mutating
 - Auth: `contract.client.require_auth()`
 - Semantics: Refunds the requested unreleased milestones back to the client and updates the contract status when all remaining milestones are refunded or released.
-- Events: None in the current implementation
+- Events: `("refunded", contract_id)`; settlement token transfer event
 - Errors: `EmptyRefundRequest`, `DuplicateMilestoneInRefund`, `ContractNotFound`, `InvalidState`, `IndexOutOfBounds`, `AlreadyReleased`, `AlreadyRefunded`, `InsufficientFunds`, `AlreadyFinalized`
+
+### refund_milestones_with_versions
+
+- Signature: `refund_milestones_with_versions(env: Env, contract_id: u32, milestone_indices: Vec<u32>, expected_versions: Vec<u32>) -> i128`
+- Kind: Mutating
+- Auth: Stored `contract.client.require_auth()`
+- Semantics: Same all-or-nothing refund as `refund_unreleased_milestones`; versions must align positionally with indices and every requested version is checked before transfer or state mutation. Each refunded milestone's version increments atomically. The original entrypoint remains supported.
+- Events: Same `refunded` and settlement token transfer events as `refund_unreleased_milestones`.
+- Errors: Same as `refund_unreleased_milestones`, plus `StaleMilestoneVersion` and `InvalidVersionCount`.
 
 ### contract_exists
 
@@ -185,6 +221,15 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Semantics: Returns the milestone list for the contract.
 - Events: None
 - Errors: `ContractNotFound`
+
+### get_milestone_version
+
+- Signature: `get_milestone_version(env: Env, contract_id: u32, milestone_index: u32) -> u32`
+- Kind: Read-only (extends the milestone TTL)
+- Auth: None
+- Semantics: Returns the current optimistic version for an existing milestone. Milestones with no transition metadata, including existing milestones created before this versioning path, return 0.
+- Events: None
+- Errors: `ContractNotFound`, `IndexOutOfBounds`
 
 ### get_refundable_balance
 
@@ -300,8 +345,8 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Kind: Mutating
 - Auth: `caller.require_auth()`
 - Semantics: Issues reputation for a completed contract once. Updates the freelancer's aggregate reputation record and stores the provided comment.
-- Events: None in the current implementation
-- Errors: `ContractNotFound`, `UnauthorizedRole`, `InvalidRating`, `EmptyComment`, `CommentTooLong`, `NotCompleted`, `ReputationAlreadyIssued`, `SelfRating`, `InvalidState`
+- Events: `rep_issd`; topics `(rep_issd, contract_id)`, data `(freelancer, rating, timestamp)`. Emitted once after successful issuance; rejected calls emit no issuance event.
+- Errors: `ContractNotFound`, `UnauthorizedRole`, `InvalidRating`, `EmptyComment`, `CommentTooLong`, `NotCompleted`, `ReputationAlreadyIssued`, `SelfRating`, `InvalidState`, `PotentialOverflow`
 
 ### get_reputation_comment
 
@@ -419,6 +464,35 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Semantics: Aborts a pending admin transfer proposal (expired or not).
 - Events: `("admin", "cancelled")`
 - Errors: `NotInitialized`, `InvalidState`, `UnauthorizedRole`
+
+### get_admin_rotation_revision
+
+- Signature: `get_admin_rotation_revision(env: Env) -> u64`
+- Kind: Read-only
+- Auth: None
+- Semantics: Returns the monotonic admin-rotation revision, defaulting to zero on upgrade.
+- Events: None
+- Errors: None
+
+### Checked admin rotation
+
+| Entrypoint | Signature (excluding `env: Env`) | Auth |
+| --- | --- | --- |
+| `propose_admin_checked` | `(proposed: Address, expected_revision: u64) -> bool` | Stored admin |
+| `accept_admin_checked` | `(expected_revision: u64) -> bool` | Proposed admin |
+| `cancel_admin_checked` | `(expected_revision: u64) -> bool` | Stored admin |
+| `recover_admin_proposal_checked` | `(expected_revision: u64) -> bool` | Stored admin |
+
+These mutating methods apply the same validation and timing rules as their legacy
+counterparts, but first reject a mismatched revision with `StaleNonce`. Recovery
+requires a pending proposal strictly older than `ADMIN_ROTATION_PROPOSAL_TTL_LEDGERS`.
+Every successful rotation, checked or legacy, increments the revision and emits
+`("admin_rotation_revision",)` with the new `u64`, followed by the existing admin
+event. At `u64::MAX`, rotation fails with `PotentialOverflow` without changing state.
+Other errors are the corresponding legacy errors. See
+[governance security](governance-security.md#concurrent-clients-and-retries) for
+snapshot reads and retry/migration guidance. Legacy methods retain latest-state
+behavior and require client migration for stale-intent protection.
 
 ### get_pending_admin
 

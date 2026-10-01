@@ -32,7 +32,7 @@ extern crate std;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::vec::Vec as StdVec;
 
-use proptest::prelude::*;
+use ::proptest::prelude::*;
 use soroban_sdk::{
     testutils::Address as _, Address, Env, Vec as SorobanVec,
 };
@@ -79,7 +79,7 @@ fn op_strategy(n_ms: usize, total: i128) -> impl Strategy<Value = Op> {
         (1i128..=overshoot).prop_map(Op::Deposit),
         (0u32..n).prop_map(Op::Approve),
         (0u32..n).prop_map(Op::Release),
-        prop::collection::vec(0u32..n, 1..=n).prop_map(Op::Refund),
+        prop::collection::vec(0u32..n, 1usize..=n as usize).prop_map(Op::Refund),
     ]
 }
 
@@ -638,7 +638,7 @@ proptest! {
         // Use amounts in the i128::MAX / 3 range to avoid multiplicative overflow.
         let max_safe = i128::MAX / 3;
         let amounts: StdVec<i128> = (0..small_count)
-            .map(|i| (max_safe / (small_count as i128)) * (i + 1))
+            .map(|i| (max_safe / (small_count as i128)) * ((i + 1) as i128))
             .collect();
         // Avoid zero amounts.
         let amounts: StdVec<i128> = amounts.into_iter().map(|a| if a <= 0 { 1 } else { a }).collect();

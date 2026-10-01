@@ -141,6 +141,14 @@ Admin transfer (two-step, timelocked):
 - `get_pending_admin() -> Option<Address>`
 - `get_pending_admin_proposed_at() -> Option<u32>`
 
+Client migration (two-step, TTL-gated):
+
+- `propose_client_migration(contract_id, current_client, new_client) -> bool`
+- `accept_client_migration(contract_id, new_client) -> bool`
+- `cancel_client_migration(contract_id, current_client) -> bool`
+- `has_pending_client_migration(contract_id) -> bool`
+- `get_pending_client_migration(contract_id) -> PendingClientMigration`
+
 ## Canonical Happy Path
 
 ### 1. Initialize Operational Admin and Bind Settlement Token
