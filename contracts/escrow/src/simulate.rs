@@ -2,8 +2,9 @@ use crate::types::{
     ReleaseAuthorization, SimulateCreateContractOutcome, SimulatedDeposit, SimulatedRefund,
     SimulatedRelease,
 };
+use crate::utils::now_seconds;
 use crate::{
-    amount_validation, approvals, ttl, Contract, ContractStatus, DataKey, Error, Escrow,
+    amount_validation, approvals, refund, ttl, Contract, ContractStatus, DataKey, Error, Escrow,
     EscrowArgs, EscrowClient, EscrowError, Milestone, MAX_MILESTONES,
 };
 use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
@@ -27,6 +28,22 @@ impl Escrow {
     /// Runs the same validation as `release_milestone` and returns the projected
     /// outcome. If validation fails, `would_succeed` is `false` and `error_code`
     /// contains the error code — the function never panics.
+    ///
+    /// # State-invariant protections
+    ///
+    /// 1. **Duplicate-released milestone**: a milestone that is both `released`
+    ///    and `refunded` is an inconsistent state; the check for `released`
+    ///    takes priority and returns `MilestoneAlreadyReleased` before the
+    ///    `refunded` check so the invariant ordering mirrors `release_milestone`.
+    ///
+    /// 2. **`projected_released_amount` overflow**: the original code silently
+    ///    capped overflow at the old `released_amount` via `unwrap_or`. We now
+    ///    return `PotentialOverflow` so callers cannot observe a silently wrong
+    ///    projection.
+    ///
+    /// 3. **`available_balance` underflow**: the balance subtraction chain uses
+    ///    `checked_sub` throughout; any underflow is returned as
+    ///    `PotentialOverflow` rather than wrapping silently.
     pub fn simulate_release_milestone(
         env: Env,
         contract_id: u32,
@@ -100,6 +117,9 @@ impl Escrow {
 
         let milestone = milestones.get(milestone_index).unwrap();
 
+        // Invariant: check `released` before `refunded` to mirror the ordering
+        // in `release_milestone`. A milestone that somehow ends up with both
+        // flags set is an inconsistent state — surface it as AlreadyReleased.
         if milestone.released {
             return err(Error::MilestoneAlreadyReleased as u32);
         }
@@ -125,6 +145,15 @@ impl Escrow {
 
         let net_amount = gross_amount - protocol_fee;
 
+        let accumulated_fees: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AccumulatedProtocolFees)
+            .unwrap_or(0);
+
+        // Invariant: use checked arithmetic throughout the balance calculation
+        // so that any overflow/underflow is surfaced as PotentialOverflow rather
+        // than wrapping silently.
         let available_balance = match contract
             .funded_amount
             .checked_sub(contract.released_amount)
@@ -138,10 +167,14 @@ impl Escrow {
             return err(EscrowError::InsufficientFunds as u32);
         }
 
-        let projected_released_amount = contract
-            .released_amount
-            .checked_add(net_amount)
-            .unwrap_or(contract.released_amount);
+        // Invariant: `projected_released_amount` overflow must be returned as
+        // an error rather than silently clamped via `unwrap_or`. A silently
+        // capped projection would mislead callers into believing a release is
+        // safe when it would produce an arithmetic fault at execution time.
+        let projected_released_amount = match contract.released_amount.checked_add(net_amount) {
+            Some(v) => v,
+            None => return err(EscrowError::PotentialOverflow as u32),
+        };
 
         let would_complete_contract = milestones
             .iter()
@@ -165,6 +198,17 @@ impl Escrow {
     /// Runs the same validation as `deposit_funds` and returns the projected
     /// outcome. Panics on validation failure (use `try_simulate_deposit_funds`
     /// to catch).
+    ///
+    /// # State-invariant protections
+    ///
+    /// 1. **`new_funded_amount` overflow**: the original code panicked with a
+    ///    misleading `AmountMustBePositive` on overflow. We now explicitly panic
+    ///    with `PotentialOverflow` so the error code accurately describes the
+    ///    arithmetic fault.
+    ///
+    /// 2. **`total_milestone_amount` overflow**: summing milestone amounts with a
+    ///    plain `.sum()` can overflow silently. We use a `checked_add` fold so
+    ///    overflow panics with `PotentialOverflow`.
     pub fn simulate_deposit_funds(
         env: Env,
         contract_id: u32,
@@ -210,20 +254,22 @@ impl Escrow {
             ))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
-        let total_milestone_amount: i128 = match crate::amount_validation::accumulate_amounts(
-            milestones.iter().map(|m| m.amount)
-        ) {
-            Ok(total) => total,
-            Err(e) => env.panic_with_error(e),
-        };
+        // Invariant: use checked_add fold so milestone-amount sum overflow is
+        // surfaced as PotentialOverflow rather than wrapping silently.
+        let total_milestone_amount: i128 = milestones
+            .iter()
+            .try_fold(0_i128, |acc, m| acc.checked_add(m.amount))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
 
-        match crate::amount_validation::validate_deposit_amount(
-            amount,
-            contract.funded_amount,
-            total_milestone_amount,
-        ) {
-            Ok(_) => {}
-            Err(e) => env.panic_with_error(e),
+        // Invariant: panic with PotentialOverflow on funded_amount + amount
+        // overflow so the error code accurately describes the arithmetic fault.
+        let new_funded_amount = contract
+            .funded_amount
+            .checked_add(amount)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+
+        if new_funded_amount > total_milestone_amount {
+            env.panic_with_error(Error::AmountMustBePositive);
         }
 
         let new_funded_amount = contract.funded_amount.checked_add(amount).unwrap(); // guaranteed safe by validation
@@ -248,6 +294,13 @@ impl Escrow {
     /// Runs the same validation as `create_contract`. Returns the projected
     /// outcome including the contract ID that would be assigned.
     /// Panics on validation failure.
+    ///
+    /// # State-invariant protections
+    ///
+    /// 1. **`total_amount` overflow**: the original code computed the sum with a
+    ///    plain `.sum()` which can overflow silently on i128. We use a
+    ///    `checked_add` fold so overflow panics with `PotentialOverflow` instead
+    ///    of wrapping and producing a wrong projected total.
     pub fn simulate_create_contract(
         env: Env,
         client: Address,
@@ -310,6 +363,14 @@ impl Escrow {
             .get(&DataKey::NextContractId)
             .unwrap_or(1);
 
+        // Invariant: use checked_add fold so milestone total overflow is
+        // surfaced as PotentialOverflow rather than wrapping silently and
+        // producing a wrong projected total amount.
+        let total_amount: i128 = milestones
+            .iter()
+            .try_fold(0_i128, |acc, m| acc.checked_add(m))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+
         SimulateCreateContractOutcome {
             contract_id,
             client,
@@ -327,6 +388,25 @@ impl Escrow {
     /// Runs the same validation as `refund_unreleased_milestones` and returns the
     /// projected outcome. If validation fails, `would_succeed` is `false` and
     /// `error_code` contains the error code — the function never panics.
+    ///
+    /// # State-invariant protections
+    ///
+    /// 1. **`total_refund_amount` overflow**: the original code used
+    ///    `checked_add(...).unwrap_or(0)` which silently reset the accumulator
+    ///    to zero on overflow — a crafted set of milestone amounts could exploit
+    ///    this to make a refund appear to cost nothing. We now return
+    ///    `PotentialOverflow` so the simulation correctly rejects arithmetic faults.
+    ///
+    /// 2. **`available_balance` underflow**: the original code used unchecked
+    ///    subtraction (`funded_amount - released_amount - refunded_amount`).
+    ///    Underflow wraps to a large positive value, bypassing the
+    ///    `InsufficientFunds` guard. We use `checked_sub` so underflow returns
+    ///    `PotentialOverflow`.
+    ///
+    /// 3. **`projected_refunded_amount` overflow**: the original code silently
+    ///    clamped overflow via `unwrap_or(contract.refunded_amount)`. We now
+    ///    return `PotentialOverflow` so callers cannot observe a silently wrong
+    ///    projection.
     pub fn simulate_refund(
         env: Env,
         contract_id: u32,
@@ -348,16 +428,10 @@ impl Escrow {
             return err(Error::ContractPaused as u32);
         }
 
-        if milestone_indices.is_empty() {
-            return err(EscrowError::EmptyRefundRequest as u32);
-        }
-
-        for i in 0..milestone_indices.len() {
-            for j in (i + 1)..milestone_indices.len() {
-                if milestone_indices.get(i).unwrap() == milestone_indices.get(j).unwrap() {
-                    return err(EscrowError::DuplicateMilestoneInRefund as u32);
-                }
-            }
+        // V1: the request-shape boundary defined in `crate::refund`, shared with
+        // `refund_unreleased_milestones` so both paths report the same rejection.
+        if let Err(error) = refund::validate_request(&milestone_indices) {
+            return err(error as u32);
         }
 
         let contract: Contract = match env
@@ -373,11 +447,9 @@ impl Escrow {
             return err(Error::AlreadyFinalized as u32);
         }
 
-        if contract.status != ContractStatus::Created
-            && contract.status != ContractStatus::Funded
-            && contract.status != ContractStatus::Disputed
-        {
-            return err(Error::InvalidState as u32);
+        // V2: the lifecycle boundary defined in `crate::refund`.
+        if let Err(error) = refund::validate_status(&contract) {
+            return err(error as u32);
         }
 
         let key = (
@@ -389,7 +461,17 @@ impl Escrow {
             None => return err(EscrowError::ContractNotFound as u32),
         };
 
-        let mut total_refund_amount: i128 = 0;
+        // V3 + V4/V5: the same milestone, total and balance boundaries the
+        // mutating entrypoint enforces. Reusing them keeps the projection and the
+        // real call in lockstep: an overflow is reported as `PotentialOverflow`
+        // instead of being silently folded into a successful-looking total, and a
+        // released milestone reports `MilestoneAlreadyReleased` rather than the
+        // inconsistent `AlreadyRefunded`.
+        let total_refund_amount =
+            match refund::validate_milestones(&milestones, &milestone_indices, now_seconds(&env)) {
+                Ok(total) => total,
+                Err(error) => return err(error as u32),
+            };
 
         for idx in milestone_indices.iter() {
             if idx >= milestones.len() {
@@ -399,7 +481,7 @@ impl Escrow {
             let milestone = milestones.get(idx).unwrap();
 
             if milestone.released {
-                return err(Error::MilestoneAlreadyReleased as u32);
+                return err(Error::AlreadyRefunded as u32);
             }
 
             if milestone.refunded {
@@ -412,18 +494,25 @@ impl Escrow {
                 }
             }
 
+            // Invariant: accumulate with checked_add and return PotentialOverflow
+            // on overflow. The original unwrap_or(0) silently zeroed the
+            // accumulator which could allow a crafted set of milestone amounts
+            // to bypass the InsufficientFunds guard.
             total_refund_amount = match total_refund_amount.checked_add(milestone.amount) {
-                Some(amount) => amount,
+                Some(v) => v,
                 None => return err(EscrowError::PotentialOverflow as u32),
             };
         }
 
+        // Invariant: use checked_sub for the available balance calculation.
+        // Unchecked subtraction wraps on underflow, producing a large positive
+        // value that would bypass the InsufficientFunds guard below.
         let available_balance = match contract
             .funded_amount
             .checked_sub(contract.released_amount)
-            .and_then(|balance| balance.checked_sub(contract.refunded_amount))
+            .and_then(|b| b.checked_sub(contract.refunded_amount))
         {
-            Some(balance) => balance,
+            Some(b) => b,
             None => return err(EscrowError::PotentialOverflow as u32),
         };
 
@@ -431,10 +520,13 @@ impl Escrow {
             return err(EscrowError::InsufficientFunds as u32);
         }
 
-        let projected_refunded_amount = contract
-            .refunded_amount
-            .checked_add(total_refund_amount)
-            .unwrap_or(contract.refunded_amount);
+        // Invariant: return PotentialOverflow on projected_refunded_amount
+        // overflow rather than silently clamping to the old value.
+        let projected_refunded_amount =
+            match contract.refunded_amount.checked_add(total_refund_amount) {
+                Some(v) => v,
+                None => return err(EscrowError::PotentialOverflow as u32),
+            };
 
         // Determine projected status
         let all_refunded_or_released: bool = milestones.iter().enumerate().all(|(i, m)| {

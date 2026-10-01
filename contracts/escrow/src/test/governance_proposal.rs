@@ -25,8 +25,8 @@
 
 use crate::ttl::GOVERNANCE_PROPOSAL_TTL_LEDGERS;
 use crate::{
-    Escrow, EscrowClient, Error, GovernanceProposalKind, GovernanceProposalState,
-    GovernedParameters, MAX_FEE_BPS, MIN_MAX_MILESTONES,
+    Error, Escrow, EscrowClient, GovernanceProposalKind, GovernanceProposalState,
+    GovernedParameters, MAX_FEE_BPS,
 };
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _, LedgerInfo};
 use soroban_sdk::{symbol_short, Address, Env, Symbol, TryFromVal};
@@ -108,7 +108,8 @@ fn full_happy_path_request_approve_apply() {
     let approver = Address::generate(&env);
 
     // 1. Admin requests a proposal to change the protocol fee.
-    let proposal_id = client.request_governance_proposal(&GovernanceProposalKind::SetProtocolFeeBps(300));
+    let proposal_id =
+        client.request_governance_proposal(&GovernanceProposalKind::SetProtocolFeeBps(300));
     assert!(proposal_id > 0);
 
     // Initial fee is 0; verify it hasn't changed yet.
@@ -547,7 +548,10 @@ fn events_emitted_for_each_state_transition() {
     };
 
     let proposal_id = client.request_governance_proposal(&fee_bps_kind());
-    assert!(has_gov_event("requested"), "requested event must be emitted");
+    assert!(
+        has_gov_event("requested"),
+        "requested event must be emitted"
+    );
 
     client.approve_governance_proposal(&proposal_id, &approver);
     assert!(has_gov_event("approved"), "approved event must be emitted");

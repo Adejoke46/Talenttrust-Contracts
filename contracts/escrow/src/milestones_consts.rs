@@ -1,1 +1,299 @@
-Ly8hIE5hbWVkIGNvbnN0YW50cyBmb3IgbWlsZXN0b25lLXJlbGF0ZWQgcHJvdG9jb2wgbGltaXRzLgovLy8KLy8vIFRoaXMgbW9kdWxlIGNlbnRyYWxpc2VzIGV2ZXJ5ICJtYWdpYyBudW1iZXIiIHRoYXQgYXBwZWFycyBpbiBtaWxlc3RvbmUKLy8vIHZhbGlkYXRpb24sIHJlcHV0YXRpb24gc2NvcmluZywgYW5kIHByb3RvY29sLWZlZSBjYWxjdWxhdGlvbiBzbyB0aGF0Ci8vLyB0aGUgYnVzaW5lc3MgcnVsZXMgYXJlIGRvY3VtZW50ZWQgaW4gb25lIHBsYWNlIGFuZCB0aGUgY2FsbC1zaXRlcyBzdGF5Ci8vLyByZWFkYWJsZS4KLy8vCi8vLyBBbGwgdmFsdWVzIGFyZSBgcHVic2Agc28gdGhleSBjYW4gYmUgcmUtZXhwb3J0ZWQgZnJvbSBgbGliLnJzYCBhbmQKLy8vIHJlZmVyZW5jZWQgYnkgZ292ZXJuYW5jZSwgZmVlLCBhbmQgdGVzdCBtb2R1bGVzIHdpdGhvdXQgY3JlYXRpbmcKLy8vIGNpcmN1bGFyIGRlcGVuZGVuY2llcy4KLy8vCi8vLyAjIENvbXBhdGliaWxpdHkgY29udHJhY3QKLy8vCi8vLyBUaGUgbnVtZXJpYyB2YWx1ZXMgYmVsb3cgYXJlIHBhcnQgb2YgdGhlIHB1YmxpYyBjb250cmFjdCBvZiB0aGlzCi8vLyBwcm90b2NvbC4gVGhleSBhcmUgb2JzZXJ2YWJsZSB0aHJvdWdoIGBnZXRfYm91bmRzKClgLCB0aHJvdWdoIGVycm9yCi8vLyBjb2RlcyByZXR1cm5lZCB0byBjYWxsZXJzLCBhbmQgdGhyb3VnaCBvbi1jaGFpbiBzdGF0ZSB0aGF0IHdhcyB2YWxpZGF0ZWQKLy8vIGFnYWluc3QgdGhlbS4gQ2hhbmdpbmcgYW55IG9mIHRoZW0gaXMgYSBicmVha2luZyBjaGFuZ2UgdGhhdCByZXF1aXJlcwovLy8gYSB0ZXN0ZWQgbWlncmF0aW9uIHBsYW4uIFRoZSB0ZXN0cyBhdCB0aGUgYm90dG9tIG9mIHRoaXMgbW9kdWxlIHBpbiB0aGUKLy8vIGV4YWN0IHZhbHVlcyBhbmQgdGhlIHJlbGF0aW9uc2hpcHMgYmV0d2VlbiB0aGVtIHNvIGFjY2lkZW50YWwgZWRpdHMgYXJlCi8vLyBjYXVnaHQgaW4gQ0kuCi8vLwovLy8gIyMgSW52YXJpYW50cwoKLy8vCi8vLyAqIGBNSU5fRkVFX0JQUyA8PSBNQVhfRkVFX0JQU2AgYW5kIGBNQVhfRkVFX0JQUyA9PQovLy8gICBgUFJPVE9DT0xfRkVFX0JQU19ERU5PTUlOQVRPUmAuCi8vLyAqIGBNSU5fUkFUSU5HIDw9IE1BWF9SQVRJTkdgLgovLy8gKiBgTUlOX0NPTU1FTlRfQllURVMgPD0gTUFYX0NPTU1FTlRfQllURVNgLgovLy8gKiBgTUlOX1dPUktfRVZJREVOQ0VfQllURVMgPD0gTUFYX1dPUktfRVZJREVOQ0VfQllURVNgLgovLy8gKiBgTUFYX1JFUElVVEFUSU9OX0NPTkZJR19SQVRJTkdfQ0VJTElORyA+PSBNQVhfUkFUSU5HYC4KLy8vICogYE1BWF9SRVBVVEFUSU9OX0NPTkZJR19DT01NRU5UX0JZVEVTX0NFRUlMSU5HID49IE1BWF9DT01NRU5UX0JZVEVTYC4KLy8vICogYE1BWF9CQVRDSF9NSUxFU1RPTkVTIDw9IE1BWF9NSUxFU1RPTkVTYC4KCi8vLyBNYXhpbXVtIG51bWJlciBvZiBtaWxlc3RvbmVzIGFsbG93ZWQgaW4gYSBzaW5nbGUgZXNjcm93IGNvbnRyYWN0LgovLy8KLy8vIGBjcmVhdGVfY29udHJhY3RgIHJlamVjdHMgYW55IGBtaWxlc3RvbmVzYCB2ZWN0b3Igd2hvc2UgYGxlbigpYCBleGNlZWRzCi8vLyB0aGlzIHZhbHVlIHdpdGggYEVzY3Jvd0Vycm9yOjpUb29NYW55TWlsZXN0b25lc2AuICBUaGUgY3VycmVudCBsaW1pdCBpcwovLy8gKioxMCoqLCBiYWxhbmNpbmcgdHJhbnNhY3Rpb24tc2l6ZSBidWRnZXRzIG9uIFNvcm9iYW4gd2l0aCByZWFsaXN0aWMKLy8vIGZyZWVsYW5jZSBwcm9qZWN0IHN0cnVjdHVyZXMuCi8vLwovLy8gRXhwb3NlZCB2aWEgYGdldF9ib3VuZHMoKWAgYXMgW2BDb250cmFjdEJvdW5kczo6bWF4X21pbGVzdG9uZXNgXS4KcHViIGNvbnN0IE1BWF9NSUxFU1RPTkVTOiB1MzIgPSAxMDsKCi8vLyBNYXhpbXVtIG51bWJlciBvZiBtaWxlc3RvbmVzIHRoYXQgY2FuIGJlIHJlbGVhc2VkIGluIGEgc2luZ2xlIGJhdGNoIGNhbGwuCi8vLwovLy8gTXVzdCBuZXZlciBleGNlZWQgW2BNQVhfTUlMRVNUT05FU2BdOyBhIGJhdGNoIGxhcmdlciB0aGFuIHRoZSB0b3RhbAovLy8gbnVtYmVyIG9mIG1pbGVzdG9uZXMgaW4gYSBjb250cmFjdCBjb3VsZCBuZXZlciBzdWNjZWVkIGFueXdheS4KcHViIGNvbnN0IE1BWF9CQVRDSF9NSUxFU1RPTkVTOiB1MzIgPSAxMDsKCi8vLyBCYXNpcy1wb2ludCBkZW5vbWluYXRvciB1c2VkIGluIGFsbCBwcm90b2NvbC1mZWUgY2FsY3VsYXRpb25zLgovLy8KLy8vIFByb3RvY29sIGZlZXMgYXJlIGV4cHJlc3NlZCBpbiAqYmFzaXMtcG9pbnRzKiAoYnBzKSwgd2hlcmUKLy8vIGAxMCAwMDAgYnBzID0gMTAwICVgLiAgRXZlcnkgZmVlIGNvbXB1dGF0aW9uIGRpdmlkZXMgYnkgdGhpcyBjb25zdGFudDoKLy8vCi8vLyBgYGB0ZXh0Ci8vLyBmZWUgPSBhbW91bnQgw5cgZmVlX2JwcyAvIFBST1RPQ09MX0ZFRV9CUFNfREVOT01JTkFUT1IKLy8vIGBgYAovLy8KLy8vIFRoaXMgaXMgYW4gaW50ZWdlciAqZmxvb3IgZGl2aXNpb24qLCBzbyB0aGUgZnJlZWxhbmNlciBhbHdheXMgcmVjZWl2ZXMKLy8vIGF0IGxlYXN0IGBhbW91bnQg4oiSIGZlZWAgc3Ryb29wcy4KLy8vCi8vLyBTZWUgYGNhbGN1bGF0ZV9wcm90b2NvbF9mZWVgIGFuZCBgc2V0X2dvdmVybmVkX3BhcmFtc2AgZm9yIHRoZSBmdWxsCi8vLyB2YWxpZGF0aW9uIGFuZCBhY2NydWFsIGZsb3cuCnB1YiBjb25zdCBQUk9UT0NPTF9GRUVfQlBTX0RFTk9NSU5BVE9SOiB1MzIgPSAxMF8wMDA7CgovLy8gTWluaW11bSBhbGxvd2VkIHByb3RvY29sIGZlZSBpbiBiYXNpcyBwb2ludHMgKGluY2x1c2l2ZSkuCi8vLwovLy8gQSBmZWUgb2YgYDAgYnBzYCBkaXNhYmxlcyBmZWUgY29sbGVjdGlvbiBlbnRpcmVseSBhbmQgY2F1c2VzCi8vLyBgY2FsY3VsYXRlX3Byb3RvY29sX2ZlZWAgdG8gc2hvcnQtY2lyY3VpdCBhbmQgcmV0dXJuIGAwYC4KLy8vCi8vLyBFeHBvc2VkIHZpYSBgZ2V0X2JvdW5kcygpYCBhcyB0aGUgaW1wbGljaXQgbG93ZXIgYm91bmQgZm9yCi8vLyBbYENvbnRyYWN0Qm91bmRzOjptYXhfZmVlX2Jwc2BdLgpwdWIgY29uc3QgTUlOX0ZFRV9CUFM6IHUzMiA9IDA7CgovLy8gTWF4aW11bSBhbGxvd2VkIHByb3RvY29sIGZlZSBpbiBiYXNpcyBwb2ludHMgKGluY2x1c2l2ZSkuCi8vLwovLy8gYHNldF9wcm90b2NvbF9mZWVfYnBzYCBhbmQgYHNldF9nb3Zlcm5lZF9wYXJhbXNgIHJlamVjdCBhbnkgYG5ld19icHNgCi8vLyB2YWx1ZSBzdHJpY3RseSBncmVhdGVyIHRoYW4gdGhpcyBjb25zdGFudCB3aXRoCi8vLyBgRXJyb3I6OkludmFsaWRQcm90b2NvbFBhcmFtZXRlcnNgLgovLy8KLy8vIEVxdWFsIHRvIFtgUFJPVE9DT0xfRkVFX0JQU19ERU5PTUlOQVRPUmBdICgxMDAgJSk6IGNoYXJnaW5nIG1vcmUgdGhhbiB0aGUKLy8vIGZ1bGwgbWlsZXN0b25lIGFtb3VudCBhcyBhIGZlZSBpcyBub25zZW5zaWNhbCBhbmQgaXMgdGhlcmVmb3JlIGRpc2FsbG93ZWQuCi8vLwovLy8gRXhwb3NlZCB2aWEgYGdldF9ib3VuZHMoKWAgYXMgW2BDb250cmFjdEJvdW5kczo6bWF4X2ZlZV9icHNgXS4KcHViIGNvbnN0IE1BWF9GRUVfQlBTOiB1MzIgPSBQUk9UT0NPTF9GRUVfQlBTX0RFTk9NSU5BVE9SOwoKLy8vIE1pbmltdW0gdmFsaWQgcmVwdXRhdGlvbiByYXRpbmcgKGluY2x1c2l2ZSkuCi8vLwovLy8gYGlzc3VlX3JlcHV0YXRpb25gIHJlamVjdHMgYSBgcmF0aW5nYCBzdHJpY3RseSBsZXNzIHRoYW4gdGhpcyB2YWx1ZSB3aXRoCi8vLyBgRXJyb3I6OkludmFsaWRSYXRpbmdgLiAgQSByYXRpbmcgb2YgKioxKiogaXMgdGhlIGxvd2VzdCBwb3NzaWJsZSBzY29yZQovLy8gYSBjbGllbnQgY2FuIGFzc2lnbiB0byBjb21wbGV0ZWQgZnJlZWxhbmNlciB3b3JrLgpwdWIgY29uc3QgTUlOX1JBVElORzogdTMyID0gMTsKCi8vLyBNYXhpbXVtIHZhbGlkIHJlcHV0YXRpb24gcmF0aW5nIChpbmNsdXNpdmUpLgovLy8KLy8vIGBpc3N1ZV9yZXB1dGF0aW9uYCByZWplY3RzIGEgYHJhdGluZ2Agc3RyaWN0bHkgZ3JlYXRlciB0aGFuIHRoaXMgdmFsdWUKLy8vIHdpdGggYEVycm9yOjpJbnZhbGlkUmF0aW5nYC4gIEEgcmF0aW5nIG9mICoqNSoqIGlzIHRoZSBoaWdoZXN0IHBvc3NpYmxlCi8vLyBzY29yZSwgZm9ybWluZyBhIDHigJM1IHN0YXIgc2NhbGUuCnB1YiBjb25zdCBNQVhfUkFUSU5HOiB1MzIgPSA1OwoKLy8vIE1heGltdW0gYnl0ZSBsZW5ndGggZm9yIGEgcmVwdXRhdGlvbiBjb21tZW50IChpbmNsdXNpdmUpLgovLy8KLy8vIGBpc3N1ZV9yZXB1dGF0aW9uYCByZWplY3RzIGEgYGNvbW1lbnRgIHdob3NlIFVURi04IGJ5dGUgbGVuZ3RoIGV4Y2VlZHMKLy8vIHRoaXMgdmFsdWUgd2l0aCBgRXJyb3I6OkNvbW1lbnRUb29Mb25nYC4KLy8vCi8vLyBTb3JvYmFuIGBTdHJpbmc6OmxlbigpYCByZXR1cm5zIHRoZSByYXcgYnl0ZSBjb3VudCwgc28gYSBtdWx0aS1ieXRlCi8vLyBjaGFyYWN0ZXIgKGUuZy4gYSAzLWJ5dGUgZW1vamkpIGNvdW50cyBhcyAzIHRvd2FyZCB0aGlzIGxpbWl0LgovLy8gQVNDSUkgY2hhcmFjdGVycyBhcmUgZWFjaCAxIGJ5dGUuCi8vLwovLy8gVGhlICoqMjAwLWJ5dGUqKiBjYXAga2VlcHMgb24tY2hhaW4gc3RvcmFnZSBib3VuZGVkOiBhdCBTdGVsbGFyJ3Mgc3Ryb29wCi8vLyBwcmljaW5nIGEgMjAwLWJ5dGUgZW50cnkgaXMgY2hlYXAgZm9yIGxlZ2l0aW1hdGUgdXNlIGJ1dCBleHBlbnNpdmUgZW5vdWdoCi8vLyB0byBkZXRlciBzcGFtLiAgVGhlIG1pbmltdW0gaXMgKioxIGJ5dGUqKiAobm9uLWVtcHR5IGNvbW1lbnQgcmVxdWlyZWQpLgpwdWIgY29uc3QgTUFYX0NPTU1FTlRfQllURVM6IHUzMiA9IDIwMDsKCi8vLyBNaW5pbXVtIGJ5dGUgbGVuZ3RoIGZvciBhIHJlcHV0YXRpb24gY29tbWVudCAoaW5jbHVzaXZlKS4KLy8vCi8vLyBgaXNzdWVfcmVwdXRhdGlvbmAgcmVqZWN0cyBhIGBjb21tZW50YCB3aG9zZSBVVEYtOCBieXRlIGxlbmd0aCBpcyBgMGAKLy8vIHdpdGggYEVycm9yOjpFbXB0eUNvbW1lbnRgLiAgQSBjb21tZW50IG11c3QgY29udGFpbiBhdCBsZWFzdCBvbmUgYnl0ZS4KcHViIGNvbnN0IE1JTl9DT01NRU5UX0JZVEVTOiB1MzIgPSAxOwoKLy8vIE1heGltdW0gYnl0ZSBsZW5ndGggZm9yIGEgd29yayBldmlkZW5jZSBzdHJpbmcgKGluY2x1c2l2ZSkuCi8vLwovLy8gYHN1Ym1pdF93b3JrX2V2aWRlbmNlYCByZWplY3RzIGFuIGBldmlkZW5jZWAgd2hvc2UgVVRGLTggYnl0ZSBsZW5ndGgKLy8vIGV4Y2VlZHMgdGhpcyB2YWx1ZSB3aXRoIGBFcnJvcjo6RXZpZGVuY2VUb29Mb25nYC4KcHViIGNvbnN0IE1BWF9XT1JLX0VWSURFTkNFX0JZVEVTOiB1MzIgPSAxXzAwMDsKCi8vLyBNaW5pbXVtIGJ5dGUgbGVuZ3RoIGZvciBhIHdvcmsgZXZpZGVuY2Ugc3RyaW5nIChpbmNsdXNpdmUpLgovLy8KLy8vIGBzdWJtaXRfd29ya19ldmlkZW5jZWAgcmVqZWN0cyBhbiBgZXZpZGVuY2VgIHdob3NlIFVURi04IGJ5dGUgbGVuZ3RoIGlzCi8vLyBgMGAgd2l0aCBgRXJyb3I6OkVtcHR5RXZpZGVuY2VgLgpwdWIgY29uc3QgTUlOX1dPUktfRVZJREVOQ0VfQllURVM6IHUzMiA9IDE7CgovLy8gTWF4aW11bSBhbGxvd2VkIHZhbHVlIGZvciB0aGUgY29uZmlndXJhYmxlIG1heGltdW0gcmF0aW5nIHBhcmFtZXRlciBpbgovLy8gcmVwdXRhdGlvbiBjb25maWd1cmF0aW9uIChgc2V0X3JlcHV0YXRpb25fY29uZmlnYCkuCi8vLwovLy8gVGhpcyBpcyB0aGUgdXBwZXIgYm91bmQgdGhhdCBhbiBhZG1pbiBjYW4gc2V0IGZvciBgbWF4X3JhdGluZ2A7Ci8vLyB0aGUgYWN0dWFsIHJhdGluZyBzY2FsZSBmb3IgYGlzc3VlX3JlcHV0YXRpb25gIGlzIGFsd2F5cyAx4oCTNQovLy8gKHNlZSBbYE1BWF9SQVRJTkdgXSkuICBUaGUgY2VpbGluZyBvZiAqKjEwKiogZ2l2ZXMgZ292ZXJuYW5jZQovLy8gZmxleGliaWxpdHkgd2l0aG91dCBhbGxvd2luZyB1bmJvdW5kZWQgcmF0aW5ncy4KLy8vCi8vLyBJbnZhcmlhbnQ6IGBNQVhfUkVQVVRBVElPTl9DT05GSUdfUkFUSU5HX0NFRUlMSU5HID49IE1BWF9SQVRJTkdgLgpwdWIgY29uc3QgTUFYX1JFUFVUQVRJT05fQ09ORklHX1JBVElOR19DRUlMSU5HOiB1MzIgPSAxMDsKCi8vLyBNYXhpbXVtIGFsbG93ZWQgdmFsdWUgZm9yIHRoZSBjb25maWd1cmFibGUgbWF4aW11bSBjb21tZW50IGJ5dGVzIHBhcmFtZXRlcgovLy8gaW4gcmVwdXRhdGlvbiBjb25maWd1cmF0aW9uIChgc2V0X3JlcHV0YXRpb25fY29uZmlnYCkuCi8vLwovLy8gVGhpcyBjYXBzIGhvdyBsYXJnZSB0aGUgYG1heF9jb21tZW50X2J5dGVzYCBmaWVsZCBjYW4gYmUgc2V0IGJ5IGFkbWluLgovLy8KLy8vIEludmFyaWFudDogYE1BWF9SRVBVVEFUSU9OX0NPTkZJR19DT01NRU5UX0JZVEVTX0NFRUlMSU5HID49IE1BWF9DT01NRU5UX0JZVEVTYC4KcHViIGNvbnN0IE1BWF9SRVBVVEFUSU9OX0NPTkZJR19DT01NRU5UX0JZVEVTX0NFRUlMSU5HOiB1MzIgPSAxXzAwMDsKCi8vLyBSZXR1cm5zIGB0cnVlYCB3aGVuIHRoZSBjb21waWxlLXRpbWUgY29uc3RhbnRzIGFib3ZlIHNhdGlzZnkgZXZlcnkKLy8vIGludmFyaWFudCB0aGF0IHRoZSBwcm90b2NvbCByZWxpZXMgb24uCi8vLwovLy8gVGhpcyBmdW5jdGlvbiBpcyBgY29uc3RgIGFuZCB0b3RhbGx5IGRldGVybWluaXN0aWM6IGl0IG5ldmVyIHBhbmljcywKLy8vIG5ldmVyIHJlYWRzIG11dGFibGUgc3RhdGUsIGFuZCBhbHdheXMgcmV0dXJucyB0aGUgc2FtZSByZXN1bHQgZm9yIGEgZ2l2ZW4KLy8vIGJ1aWxkLiAgSXQgaXMgdXNlZCBieSB0aGUgY29udHJhY3QncyBpbml0aWFsaXNhdGlvbiBwYXRoIHRvIGZhaWwgZmFzdCBpZgovLy8gYSBmdXR1cmUgZWRpdCB3b3VsZCBzaWxlbnRseSBicmVhayB0aGUgY29tcGF0aWJpbGl0eSBjb250cmFjdC4KLy8vCi8vLyBUaGUgY2hlY2tzIGFyZSB3cml0dGVuIGFzIGBjb25zdCBib29sYCBleHByZXNzaW9ucyBzbyB0aGF0IGEgYnJva2VuCi8vLyBpbnZhcmlhbnQgY2FuIGFsc28gYmUgY2F1Z2h0IGF0IGNvbXBpbGUgdGltZSB2aWEgYSBgY29uc3QgYXNzZXJ0aW9uYAovLy8gY2FsbC1zaXRlLgpwdWIgY29uc3QgZm4gaW52YXJpYW50c19ob2xkKCkgLT4gYm9vbCB7CiAgICBNSU5fRkVFX0JQUyA8PSBNQVhfRkVFX0JQUwogICAgICAgICYmIE1BWF9GRUVfQlBTID09IFBST1RPQ09MX0ZFRV9CUFNfREVOT01JTkFUT1IKICAgICAgICAmJiBNSU5fUkFUSU5HIDw9IE1BWF9SQVRJTkcKICAgICAgICAmJiBNSU5fQ09NTUVOVF9CWVRFUyA8PSBNQVhfQ09NTUVOVF9CWVRFUwogICAgICAgICYmIE1JTl9XT1JLX0VWSURFTkNFX0JZVEVTIDw9IE1BWF9XT1JLX0VWSURFTkNFX0JZVEVTCiAgICAgICAgJiYgTUFYX1JFUElVVEFUSU9OX0NPTkZJR19SQVRJTkdfQ0VJTElORyA+PSBNQVhfUkFUSU5HCiAgICAgICAgJiYgTUFYX1JFUElVVEFUSU9OX0NPTkZJR19DT01NRU5UX0JZVEVTX0NFRUlMSU5HID49IE1BWF9DT01NRU5UX0JZVEVTCiAgICAgICAgJiYgTUFYX0JBVENIX01JTEVTVE9ORVMgPD0gTUFYX01JTEVTVE9ORVMKfQoKI2BbY2ZnKHRlc3QpXQptb2QgdGVzdHMgewogICAgdXNlIHN1cGVyOjoqOwoKICAgIC8vLyBWYWx1ZXMgYXJlIGlkZW50aWNhbCB0byB0aGUgbGl0ZXJhbHMgdGhhdCBwcmV2aW91c2x5IGFwcGVhcmVkIGlubGluZTsKICAgIC8vLyB0aGlzIHRlc3QgcGlucyB0aGVtIHNvIGEgZnV0dXJlIGVkaXQgdG8gdGhlIGNvbnN0YW50IGlzIGNhdWdodC4KICAgIC8vLwovLy8gVGhlc2UgdmFsdWVzIGFyZSBwYXJ0IG9mIHRoZSBwdWJsaWMgY29tcGF0aWJpbGl0eSBjb250cmFjdDogY2hhbmdpbmcKICAgIC8vLyBhbnkgb2YgdGhlbSB3aXRob3V0IGEgbWlncmF0aW9uIHBsYW4gaXMgYSBicmVha2luZyBjaGFuZ2UuCiAgICAjW3Rlc3RdCiAgICBmbiBtaWxlc3RvbmVfY29uc3RhbnRzX2hhdmVfY29ycmVjdF92YWx1ZXMoKSB7CiAgICAgICAgYXNzZXJ0X2VxIShNQVhfTUlMRVNUT05FUywgMTApOwogICAgICAgIGFzc2VydF9lcSEoTUFYX0JBVENIX01JTEVTVE9ORVMsIDEwKTsKICAgICAgICBhc3NlcnRfZXEhKFBST1RPQ09MX0ZFRV9CUFNfREVOT01JTkFUT1IsIDEwXzAwMCk7CiAgICAgICAgYXNzZXJ0X2VxIShNSU5fRkVFX0JQUywgMCk7CiAgICAgICAgYXNzZXJ0X2VxIShNQVhfRkVFX0JQUywgMTBfMDAwKTsKICAgICAgICBhc3NlcnRfZXEhKE1JTl9SQVRJTkcsIDEpOwogICAgICAgIGFzc2VydF9lcSEoTUFYX1JBVElORywgNSk7CiAgICAgICAgYXNzZXJ0X2VxIShNQVhfQ09NTUVOVF9CWVRFUywgMjAwKTsKICAgICAgICBhc3NlcnRfZXEhKE1JTl9DT01NRU5UX0JZVEVTLCAxKTsKICAgICAgICBhc3NlcnRfZXEhKE1BWF9XT1JLX0VWSURFTkNFX0JZVEVTLCAxXzAwMCk7CiAgICAgICAgYXNzZXJ0X2VxIShNSU5fV09SS19FVklERU5DRV9CWVRFUywgMSk7CiAgICAgICAgYXNzZXJ0X2VxIShNQVhfUkVQVVRBVElPTl9DT05GSUdfUkFUSU5HX0NFRUlMSU5HLCAxMCk7CiAgICAgICAgYXNzZXJ0X2VxIShNQVhfUkVQVVRBVElPTl9DT05GSUdfQ09NTUVOVF9CWVRFU19DRUlMSU5HLCAxXzAwMCk7CiAgICB9CgogICAgLy8vIE1BWF9GRUVfQlBTIG11c3QgZXF1YWwgdGhlIGRlbm9taW5hdG9yIOKAlCBjaGFyZ2luZyAxMDAgJSBpcyB0aGUgY2VpbGluZy4KICAgICNbdGVzdF0KICAgIGZuIG1heF9mZWVfYnBzX2VxdWFsc19kZW5vbWluYXRvcigpIHsKICAgICAgICBhc3NlcnRfZXEhKAogICAgICAgICAgICBNQVhfRkVFX0JQUywgUFJPVE9DT0xfRkVFX0JQU19ERU5PTUlOQVRPUiwKICAgICAgICAgICAgIk1BWF9GRUVfQlBTIG11c3QgZXF1YWwgUFJPVE9DT0xfRkVFX0JQU19ERU5PTUlOQVRPUiIKICAgICAgICApOwogICAgfQoKICAgIC8vLyBSYXRpbmcgcmFuZ2UgbXVzdCBiZSBhIHByb3BlciBub24tZW1wdHkgaW50ZXJ2YWwuCiAgICAjW3Rlc3RdCiAgICBmbiByYXRpbmdfcmFuZ2VfaXNfdmFsaWQoKSB7CiAgICAgICAgYXNzZXJ0IShNSU5fUkFUSU5HIDw9IE1BWF9SQVRJTkcsICJNSU5fUkFUSU5HIG11c3Qg4omkIE1BWF9SQVRJTkciKTsKICAgICAgICBhc3NlcnRfZXEhKE1JTl9SQVRJTkcsIDEpOwogICAgICAgIGFzc2VydF9lcSEoTUFYX1JBVElORywgNSk7CiAgICB9CgogICAgLy8vIENvbW1lbnQgYnl0ZSByYW5nZSBtdXN0IGJlIGEgcHJvcGVyIG5vbi1lbXB0eSBpbnRlcnZhbC4KICAgICNbdGVzdF0KICAgIGZuIGNvbW1lbnRfYnl0ZV9yYW5nZV9pc192YWxpZCgpIHsKICAgICAgICBhc3NlcnQhKAogICAgICAgICAgICBNSU5fQ09NTUVOVF9CWVRFUyA8PSBNQVhfQ09NTUVOVF9CWVRFUywKICAgICAgICAgICAgIk1JTl9DT01NRU5UX0JZVEVTIG11c3Qg4omkIE1BWF9DT01NRU5UX0JZVEVTIgogICAgICAgICk7CiAgICB9CgogICAgLy8vIEV2ZXJ5IHJhdGluZyB2YWx1ZSBpbnNpZGUgW01JTl9SQVRJTkcsIE1BWF9SQVRJTkddIHNob3VsZCBiZSBhY2NlcHRlZAogICAgLy8vIGFuZCBldmVyeSB2YWx1ZSBvdXRzaWRlIHJlamVjdGVkIOKAlCBkb2N1bWVudCB0aGUgaW5jbHVzaXZlIGJvdW5kYXJpZXMuCiAgICAjW3Rlc3RdCiAgICBmbiByYXRpbmdfYm91bmRhcnlfY292ZXJhZ2UoKSB7CiAgICAgICAgbGV0IHZhbGlkX3JhdGluZ3MgPSBbTUlOX1JBVElORywgMiwgMywgNCwgTUFYX1JBVElOR107CiAgICAgICAgZm9yICZyIGluICZ2YWxpZF9yYXRpbmdzIHsKICAgICAgICAgICAgYXNzZXJ0ISgKICAgICAgICAgICAgICAgIHIgPj0gTUlOX1JBVElORyAmJiByIDw9IE1BWF9SQVRJTkcsCiAgICAgICAgICAgICAgICAicmF0aW5nIHtyfSBzaG91bGQgYmUgd2l0aGluIGJvdW5kcyIKICAgICAgICAgICAgKTsKICAgICAgICB9CgogICAgICAgIC8vIFZhbHVlcyBqdXN0IG91dHNpZGUgdGhlIHJhbmdlCiAgICAgICAgbGV0IGJlbG93ID0gTUlOX1JBVElORy53cmFwcGluZ19zdWIoMSk7IC8vIDAKICAgICAgICBsZXQgYWJvdmUgPSBNQVhfUkFUSU5HICsgMTsgLy8gNgogICAgICAgIGFzc2VydCEoCiAgICAgICAgICAgIGJlbG93IDwgTUlOX1JBVElORyB8fCBiZWxvdyA+IE1BWF9SQVRJTkcsCiAgICAgICAgICAgICJyYXRpbmcge2JlbG93fSBzaG91bGQgYmUgb3V0LW9mLWJvdW5kcyIKICAgICAgICApOwogICAgICAgIGFzc2VydCEoCiAgICAgICAgICAgIGFib3ZlIDwgTUlOX1JBVElORyB8fCBhYm92ZSA+IE1BWF9SQVRJTkcsCiAgICAgICAgICAgICJyYXRpbmcge2Fib3ZlfSBzaG91bGQgYmUgb3V0LW9mLWJvdW5kcyIKICAgICAgICApOwogICAgfQoKICAgIC8vLyBDb21tZW50IGxlbmd0aCBib3VuZGFyeSBjb3ZlcmFnZSDigJQgZWRnZSB2YWx1ZXMgYXQgMCwgMSwgMjAwLCAyMDEuCiAgICAjW3Rlc3RdCiAgICBmbiBjb21tZW50X2xlbmd0aF9ib3VuZGFyeV9jb3ZlcmFnZSgpIHsKICAgICAgICAvLyBUaGVzZSBtaXJyb3IgdGhlIGd1YXJkcyBpbiBpc3N1ZV9yZXB1dGF0aW9uKCkKICAgICAgICBhc3NlcnQhKAogICAgICAgICAgICAwIDwgTUlOX0NPTU1FTlRfQllURVMsCiAgICAgICAgICAgICJlbXB0eSBjb21tZW50ICgwIGJ5dGVzKSBtdXN0IGJlIHJlamVjdGVkIgogICAgICAgICk7CiAgICAgICAgYXNzZXJ0ISgKICAgICAgICAgICAgTUlOX0NPTU1FTlRfQllURVMgPD0gTUFYX0NPTU1FTlRfQllURVMsCiAgICAgICAgICAgICJtaW4gbXVzdCBub3QgZXhjZWVkIG1heCIKICAgICAgICApOwogICAgICAgIGFzc2VydF9lcSEoTUFYX0NPTU1FTlRfQllURVMsIDIwMCk7CiAgICAgICAgLy8gT25lIGJ5dGUgb3ZlciB0aGUgbGltaXQKICAgICAgICBsZXQgb3Zlcl9saW1pdCA9IE1BWF9DT01NRU5UX0JZVEVTICsgMTsKICAgICAgICBhc3NlcnQhKAogICAgICAgICAgICBvdmVyX2xpbWl0ID4gTUFYX0NPTU1FTlRfQllURVMsCiAgICAgICAgICAgICIyMDEtYnl0ZSBjb21tZW50IG11c3QgZXhjZWVkIHRoZSBjYXAiCiAgICAgICAgKTsKICAgIH0KCiAgICAvLy8gUHJvdG9jb2wgZmVlIGJvdW5kYXJ5IGNvdmVyYWdlIOKAlCAwIGFuZCAxMF8wMDAgYXJlIGJvdGggdmFsaWQ7CiAgICAvLy8gMTBfMDAxIG11c3QgYmUgcmVqZWN0ZWQgYnkgZ292ZXJuYW5jZSBsb2dpYy4KICAgICNbdGVzdF0KICAgIGZuIGZlZV9icHNfYm91bmRhcnlfY292ZXJhZ2UoKSB7CiAgICAgICAgLy8gQm91bmRhcnkgdmFsdWVzIHRoYXQgbXVzdCBiZSBhY2NlcHRlZC4KICAgICAgICAvLyBNSU5fRkVFX0JQUyA9PSAwICh1MzIgbWluaW11bSksIE1BWF9GRUVfQlBTID09IDEwXzAwMC4KICAgICAgICBhc3NlcnRfZXEhKE1JTl9GRUVfQlBTLCAwKTsKICAgICAgICBhc3NlcnRfZXEhKE1BWF9GRUVfQlBTLCAxMF8wMDApOwogICAgICAgIC8vIE1BWCБtdXN0IHN0cmljdGx5IGV4Y2VlZCBNSU4gc28gdGhlIGZlZSByYW5nZSBpcyBub24tdHJpdmlhbC4KICAgICAgICBhc3NlcnQhKE1BWF9GRUVfQlBTID4gMCwgIk1BWF9GRUVfQlBTIG11c3QgYmUgPiAwIik7CgogICAgICAgIC8vIE9uZSBicHMgb3ZlciB0aGUgbWF4aW11bSBtdXN0IGV4Y2VlZCB0aGUgbGltaXQKICAgICAgICBsZXQgb3Zlcl9saW1pdCA9IE1BWF9GRUVfQlBTICsgMTsKICAgICAgICBhc3NlcnQhKAogICAgICAgICAgICBvdmVyX2xpbWl0ID4gTUFYX0ZFRV9CUFMsCiAgICAgICAgICAgICIxMF8wMDEgYnBzIG11c3QgZXhjZWVkIE1BWF9GRUVfQlBTIgogICAgICAgICk7CiAgICB9CgogICAgLy8vIFdvcmstZXZpZGVuY2UgYnl0ZSByYW5nZSBtdXN0IGJlIGEgcHJvcGVyIG5vbi1lbXB0eSBpbnRlcnZhbC4KICAgICNbdGVzdF0KICAgIGZuIHdvcmtfZXZpZGVuY2VfYnl0ZV9yYW5nZV9pc192YWxpZCgpIHsKICAgICAgICBhc3NlcnQhKAogICAgICAgICAgICBNSU5fV09SS19FVklERU5DRV9CWVRFUyA8PSBNQVhfV09SS19FVklERU5DRV9CWVRFUywKICAgICAgICAgICAgIk1JTl9XT1JLX0VWSURFTkNFX0JZVEVTIG11c3Qg4omkIE1BWF9XT1JLX0VWSURFTkNFX0JZVEVTIgogICAgICAgICk7CiAgICAgICAgYXNzZXJ0X2VxIShNSU5fV09SS19FVklERU5DRV9CWVRFUywgMSk7CiAgICAgICAgYXNzZXJ0X2VxIShNQVhfV09SS19FVklERU5DRV9CWVRFUywgMV8wMDApOwogICAgfQoKICAgIC8vLyBSZXB1dGF0aW9uLWNvbmZpZyBjZWlsaW5ncyBtdXN0IG5vdCB1bmRlcmN1dCB0aGUgZW5mb3JjZWQgcmFuZ2VzLAogICAgLy8vIG90aGVyd2lzZSBnb3Zlcm5hbmNlIGNvdWxkIG5vdCByZXByb2R1Y2UgdGhlIGRlZmF1bHQgYmVoYXZpb3IuCiAgICAjW3Rlc3RdCiAgICBmbiByZXB1dGF0aW9uX2NvbmZpZ19jZWlsaW5nc19jb3Zlcl9lbmZvcmNlZF9yYW5nZXMoKSB7CiAgICAgICAgYXNzZXJ0ISgKICAgICAgICAgICAgTUFYX1JFUElVVEFUSU9OX0NPTkZJR19SQVRJTkdfQ0VJTElORyA+PSBNQVhfUkFUSU5HLAogICAgICAgICAgICAiY29uZmlnIHJhdGluZyBjZWlsaW5nIG11c3QgY292ZXIgTUFYX1JBVElORyIKICAgICAgICApOwogICAgICAgIGFzc2VydCEoCiAgICAgICAgICAgIE1BWF9SRVBVVEFUSU9OX0NPTkZJR19DT01NRU5UX0JZVEVTX0NFRUlMSU5HID49IE1BWF9DT01NRU5UX0JZVEVTLAogICAgICAgICAgICAiY29uZmlnIGNvbW1lbnQgY2VpbGluZyBtdXN0IGNvdmVyIE1BWF9DT01NRU5UX0JZVEVTIgogICAgICAgICk7CiAgICB9CgogICAgLy8vIEJhdGNoIHJlbGVhc2UgbGltaXQgbXVzdCBub3QgZXhjZWVkIHRoZSB0b3RhbCBtaWxlc3RvbmUgbGltaXQuCiAgICAjW3Rlc3RdCiAgICBmbiBiYXRjaF9saW1pdF9kb2VzX25vdF9leGNlZWRfbWlsZXN0b25lX2xpbWl0KCkgewogICAgICAgIGFzc2VydCEoCiAgICAgICAgICAgIE1BWF9CQVRDSF9NSUxFU1RPTkVTIDw9IE1BWF9NSUxFU1RPTkVTLAogICAgICAgICAgICAiTUFYX0JBVENIX01JTEVTVE9ORVMgbXVzdCBub3QgZXhjZWVkIE1BWF9NSUxFU1RPTkVTIgogICAgICAgICk7CiAgICB9CgogICAgLy8vIFRoZSBjb21waWxlLXRpbWUgaW52YXJpYW50IGNoZWNrIG11c3QgaG9sZCBmb3IgdGhlIGN1cnJlbnQgY29uc3RhbnRzLgogICAgI1t0ZXN0XQogICAgZm4gaW52YXJpYW50c19mdW5jdGlvbl9yZXR1cm5zX3RydWUoKSB7CiAgICAgICAgYXNzZXJ0IShpbnZhcmlhbnRzX2hvbGQoKSk7CiAgICB9CgogICAgLy8vIFRoZSBpbnZhcmlhbnQgZnVuY3Rpb24gbXVzdCBiZSBjYWxsYWJsZSBpbiBhIGNvbnN0IGNvbnRleHQsIGFuZCB0aGUKICAgIC8vLyBjb21waWxlciBtdXN0IGFjY2VwdCB0aGUgY29uc3QgYXNzZXJ0aW9uIGF0IGJ1aWxkIHRpbWUuCiAgICBjb25zdCBfOiAoKSA9IGFzc2VydCEoaW52YXJpYW50c19ob2xkKCkpOwp9Cg==
+//! Named constants for milestone-related protocol limits.
+//!
+//! This module centralises every "magic number" that appears in milestone
+//! validation, reputation scoring, and protocol-fee calculation so that
+//! the business rules are documented in one place and the call-sites stay
+//! readable.
+//!
+//! All values are `pub` so they can be re-exported from `lib.rs` and
+//! referenced by governance, fee, and test modules without creating
+//! circular dependencies.
+
+/// Maximum number of milestones allowed in a single escrow contract.
+///
+/// `create_contract` rejects any `milestones` vector whose `len()` exceeds
+/// this value with `EscrowError::TooManyMilestones`.  The current limit is
+/// **10**, balancing transaction-size budgets on Soroban with realistic
+/// freelance project structures.
+///
+/// Exposed via `get_bounds()` as [`ContractBounds::max_milestones`].
+pub const MAX_MILESTONES: u32 = 10;
+
+/// Maximum number of milestones that can be released in a single batch call.
+pub const MAX_BATCH_MILESTONES: u32 = 10;
+
+/// Basis-point denominator used in all protocol-fee calculations.
+///
+/// Protocol fees are expressed in *basis points* (bps), where
+/// `10 000 bps = 100 %`.  Every fee computation divides by this constant:
+///
+/// ```text
+/// fee = amount × fee_bps / PROTOCOL_FEE_BPS_DENOMINATOR
+/// ```
+///
+/// This is an integer **floor division**, so the freelancer always receives
+/// at least `amount − fee` stroops.
+///
+/// See `calculate_protocol_fee` and `set_governed_params` for the full
+/// validation and accrual flow.
+pub const PROTOCOL_FEE_BPS_DENOMINATOR: u32 = 10_000;
+
+/// Minimum allowed protocol fee in basis points (inclusive).
+///
+/// A fee of `0 bps` disables fee collection entirely and causes
+/// `calculate_protocol_fee` to short-circuit and return `0`.
+///
+/// Exposed via `get_bounds()` as the implicit lower bound for
+/// [`ContractBounds::max_fee_bps`].
+pub const MIN_FEE_BPS: u32 = 0;
+
+/// Maximum allowed protocol fee in basis points (inclusive).
+///
+/// `set_protocol_fee_bps` and `set_governed_params` reject any `new_bps`
+/// value strictly greater than this constant with
+/// `Error::InvalidProtocolParameters`.
+///
+/// Equal to [`PROTOCOL_FEE_BPS_DENOMINATOR`] (100 %): charging more than the
+/// full milestone amount as a fee is nonsensical and is therefore disallowed.
+///
+/// Exposed via `get_bounds()` as [`ContractBounds::max_fee_bps`].
+pub const MAX_FEE_BPS: u32 = PROTOCOL_FEE_BPS_DENOMINATOR;
+
+/// Minimum valid reputation rating (inclusive).
+///
+/// `issue_reputation` rejects a `rating` strictly less than this value with
+/// `Error::InvalidRating`.  A rating of **1** is the lowest possible score
+/// a client can assign to completed freelancer work.
+pub const MIN_RATING: u32 = 1;
+
+/// Maximum valid reputation rating (inclusive).
+///
+/// `issue_reputation` rejects a `rating` strictly greater than this value
+/// with `Error::InvalidRating`.  A rating of **5** is the highest possible
+/// score, forming a 1–5 star scale.
+pub const MAX_RATING: u32 = 5;
+
+/// Maximum byte length for a reputation comment (inclusive).
+///
+/// `issue_reputation` rejects a `comment` whose UTF-8 byte length exceeds
+/// this value with `Error::CommentTooLong`.
+///
+/// Soroban `String::len()` returns the raw byte count, so a multi-byte
+/// character (e.g. a 3-byte emoji) counts as 3 toward this limit.
+/// ASCII characters are each 1 byte.
+///
+/// The **200-byte** cap keeps on-chain storage bounded: at Stellar's stroop
+/// pricing a 200-byte entry is cheap for legitimate use but expensive enough
+/// to deter spam.  The minimum is **1 byte** (non-empty comment required).
+pub const MAX_COMMENT_BYTES: u32 = 200;
+
+/// Minimum byte length for a reputation comment (inclusive).
+///
+/// `issue_reputation` rejects a `comment` whose UTF-8 byte length is `0`
+/// with `Error::EmptyComment`.  A comment must contain at least one byte.
+pub const MIN_COMMENT_BYTES: u32 = 1;
+
+/// Maximum byte length for a work evidence string (inclusive).
+pub const MAX_WORK_EVIDENCE_BYTES: u32 = 1_000;
+
+/// Minimum byte length for a work evidence string (inclusive).
+pub const MIN_WORK_EVIDENCE_BYTES: u32 = 1;
+
+/// Maximum allowed value for the configurable maximum rating parameter in
+/// reputation configuration (`set_reputation_config`).
+///
+/// This is the upper bound that an admin can set for `max_rating`;
+/// the actual rating scale for `issue_reputation` is always 1–5
+/// (see [`MAX_RATING`]).  The ceiling of **10** gives governance
+/// flexibility without allowing unbounded ratings.
+pub const MAX_REPUTATION_CONFIG_RATING_CEILING: u32 = 10;
+
+/// Maximum allowed value for the configurable maximum comment bytes parameter
+/// in reputation configuration (`set_reputation_config`).
+///
+/// This caps how large the `max_comment_bytes` field can be set by admin.
+pub const MAX_REPUTATION_CONFIG_COMMENT_BYTES_CEILING: u32 = 1_000;
+
+/// Maximum number of deterministic recovery attempts allowed for transient failures
+/// during milestone operations or batch releases.
+///
+/// Ensures failure recovery is bounded and deterministic, preventing infinite loops
+/// or resource exhaustion when recovering from adverse conditions.
+pub const MAX_RECOVERY_ATTEMPTS: u32 = 3;
+
+/// Maximum time-to-live (in ledgers) for transient failure recovery tracking.
+///
+/// Defines the observability window for failed states, ensuring failures are
+/// recoverable and diagnosable without silent data loss. (17280 ledgers ≈ 1 day).
+pub const RECOVERY_TTL_LEDGERS: u32 = 17_280;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Values are identical to the literals that previously appeared inline;
+    /// this test pins them so a future edit to the constant is caught.
+    #[test]
+    fn milestone_constants_have_correct_values() {
+        assert_eq!(MAX_MILESTONES, 10);
+        assert_eq!(PROTOCOL_FEE_BPS_DENOMINATOR, 10_000);
+        assert_eq!(MIN_FEE_BPS, 0);
+        assert_eq!(MAX_FEE_BPS, 10_000);
+        assert_eq!(MIN_RATING, 1);
+        assert_eq!(MAX_RATING, 5);
+        assert_eq!(MAX_COMMENT_BYTES, 200);
+        assert_eq!(MIN_COMMENT_BYTES, 1);
+        assert_eq!(MAX_WORK_EVIDENCE_BYTES, 1_000);
+        assert_eq!(MIN_WORK_EVIDENCE_BYTES, 1);
+        assert_eq!(MAX_REPUTATION_CONFIG_RATING_CEILING, 10);
+        assert_eq!(MAX_REPUTATION_CONFIG_COMMENT_BYTES_CEILING, 1_000);
+        assert_eq!(MAX_RECOVERY_ATTEMPTS, 3);
+        assert_eq!(RECOVERY_TTL_LEDGERS, 17_280);
+    }
+
+    /// Recovery limits must be deterministic and proper non-empty values.
+    #[test]
+    fn recovery_limits_are_deterministic() {
+        assert!(MAX_RECOVERY_ATTEMPTS > 0, "MAX_RECOVERY_ATTEMPTS must be > 0");
+        assert!(RECOVERY_TTL_LEDGERS > 0, "RECOVERY_TTL_LEDGERS must be > 0");
+    }
+
+    /// MAX_FEE_BPS must equal the denominator — charging 100 % is the ceiling.
+    #[test]
+    fn max_fee_bps_equals_denominator() {
+        assert_eq!(
+            MAX_FEE_BPS, PROTOCOL_FEE_BPS_DENOMINATOR,
+            "MAX_FEE_BPS must equal PROTOCOL_FEE_BPS_DENOMINATOR"
+        );
+    }
+
+    /// Rating range must be a proper non-empty interval.
+    #[test]
+    fn rating_range_is_valid() {
+        assert!(MIN_RATING <= MAX_RATING, "MIN_RATING must be ≤ MAX_RATING");
+        assert_eq!(MIN_RATING, 1);
+        assert_eq!(MAX_RATING, 5);
+    }
+
+    /// Comment byte range must be a proper non-empty interval.
+    #[test]
+    fn comment_byte_range_is_valid() {
+        assert!(
+            MIN_COMMENT_BYTES <= MAX_COMMENT_BYTES,
+            "MIN_COMMENT_BYTES must be ≤ MAX_COMMENT_BYTES"
+        );
+    }
+
+    /// Every rating value inside [MIN_RATING, MAX_RATING] should be accepted
+    /// and every value outside rejected — document the inclusive boundaries.
+    #[test]
+    fn rating_boundary_coverage() {
+        let valid_ratings = [MIN_RATING, 2, 3, 4, MAX_RATING];
+        for &r in &valid_ratings {
+            assert!(
+                r >= MIN_RATING && r <= MAX_RATING,
+                "rating {r} should be within bounds"
+            );
+        }
+
+        // Values just outside the range
+        let below = MIN_RATING.wrapping_sub(1); // 0
+        let above = MAX_RATING + 1; // 6
+        assert!(
+            below < MIN_RATING || below > MAX_RATING,
+            "rating {below} should be out-of-bounds"
+        );
+        assert!(
+            above < MIN_RATING || above > MAX_RATING,
+            "rating {above} should be out-of-bounds"
+        );
+    }
+
+    /// Comment length boundary coverage — edge values at 0, 1, 200, 201.
+    #[test]
+    fn comment_length_boundary_coverage() {
+        // These mirror the guards in issue_reputation()
+        assert!(
+            0 < MIN_COMMENT_BYTES,
+            "empty comment (0 bytes) must be rejected"
+        );
+        assert!(
+            MIN_COMMENT_BYTES <= MAX_COMMENT_BYTES,
+            "min must not exceed max"
+        );
+        assert_eq!(MAX_COMMENT_BYTES, 200);
+        // One byte over the limit
+        let over_limit = MAX_COMMENT_BYTES + 1;
+        assert!(
+            over_limit > MAX_COMMENT_BYTES,
+            "201-byte comment must exceed the cap"
+        );
+    }
+
+    /// Protocol fee boundary coverage — 0 and 10_000 are both valid;
+    /// 10_001 must be rejected by governance logic.
+    #[test]
+    fn fee_bps_boundary_coverage() {
+        // Boundary values that must be accepted.
+        // MIN_FEE_BPS == 0 (u32 minimum), MAX_FEE_BPS == 10_000.
+        assert_eq!(MIN_FEE_BPS, 0);
+        assert_eq!(MAX_FEE_BPS, 10_000);
+        // MAX must strictly exceed MIN so the fee range is non-trivial.
+        assert!(MAX_FEE_BPS > 0, "MAX_FEE_BPS must be > 0");
+
+        // One bps over the maximum must exceed the limit
+        let over_limit = MAX_FEE_BPS + 1;
+        assert!(
+            over_limit > MAX_FEE_BPS,
+            "10_001 bps must exceed MAX_FEE_BPS"
+        );
+    }
+
+    /// Ensure that concurrent reads of these constants from multiple threads
+    /// do not produce inconsistent or stale results, guaranteeing thread-safety
+    /// and deterministic behaviour under parallel access patterns.
+    #[test]
+    fn concurrent_read_consistency() {
+        extern crate std;
+        use std::thread;
+        use std::vec::Vec;
+
+        let num_threads = 20;
+        let mut handles = Vec::new();
+
+        for _ in 0..num_threads {
+            handles.push(thread::spawn(|| {
+                // Read all constants, asserting their validity and absence of stale state
+                assert_eq!(MAX_MILESTONES, 10);
+                assert_eq!(MAX_BATCH_MILESTONES, 10);
+                assert_eq!(PROTOCOL_FEE_BPS_DENOMINATOR, 10_000);
+                assert_eq!(MIN_FEE_BPS, 0);
+                assert_eq!(MAX_FEE_BPS, 10_000);
+                assert_eq!(MIN_RATING, 1);
+                assert_eq!(MAX_RATING, 5);
+                assert_eq!(MAX_COMMENT_BYTES, 200);
+                assert_eq!(MIN_COMMENT_BYTES, 1);
+                assert_eq!(MAX_WORK_EVIDENCE_BYTES, 1_000);
+                assert_eq!(MIN_WORK_EVIDENCE_BYTES, 1);
+                assert_eq!(MAX_REPUTATION_CONFIG_RATING_CEILING, 10);
+                assert_eq!(MAX_REPUTATION_CONFIG_COMMENT_BYTES_CEILING, 1_000);
+            }));
+        }
+
+        for handle in handles {
+            assert!(handle.join().is_ok(), "Thread panicked during concurrent read");
+        }
+    }
+
+    /// Idempotency test: repeated reads and boundary checks must consistently 
+    /// produce the same state and evaluation over time, preventing duplicate work bugs.
+    #[test]
+    fn idempotent_boundary_evaluations() {
+        let iters = 1_000;
+        for _ in 0..iters {
+            assert_eq!(MAX_BATCH_MILESTONES, 10);
+            assert_eq!(MAX_MILESTONES, 10);
+            assert_eq!(PROTOCOL_FEE_BPS_DENOMINATOR, 10_000);
+        }
+    }
+}

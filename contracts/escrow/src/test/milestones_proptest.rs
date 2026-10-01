@@ -1,4 +1,4 @@
-//! Property-based tests for milestone invariants.
+//! Property-based tests for milestone invariants and validation boundaries.
 //!
 //! Tests core invariants that must hold across randomized milestone configurations:
 //!
@@ -13,6 +13,11 @@
 //! INVARIANT 3 — Index bounds:
 //! - Valid milestone index always in range [0, milestones.len())
 //! - Out-of-bounds index always returns an error
+//!
+//! INVARIANT 3b — Validation boundaries:
+//! - Empty milestone lists are rejected at creation
+//! - Zero and negative amounts are rejected
+//! - Duplicate submissions of the same release are rejected
 //!
 //! INVARIANT 4 — State consistency:
 //! - Total released amount never exceeds total escrow amount
@@ -58,6 +63,7 @@ use crate::{Escrow, EscrowClient, ReleaseAuthorization};
 const MAX_MILESTONES: usize = 32;
 const MIN_AMOUNT: i128 = 1;
 const MAX_AMOUNT: i128 = 1_000_000_000;
+const MAX_TOTAL: i128 = i128::MAX / 2;
 const DEFAULT_CASES: u32 = 256;
 
 // ---------------------------------------------------------------------------
@@ -70,12 +76,31 @@ fn milestone_amounts() -> impl Strategy<Value = StdVec<i128>> {
     prop::collection::vec(MIN_AMOUNT..=MAX_AMOUNT, 1..=MAX_MILESTONES)
 }
 
+/// Generate a list of amounts that may include invalid (zero/negative) values.
+fn milestone_amounts_with_invalid() -> impl Strategy<Value = StdVec<i128>> {
+    prop::collection::vec(-MAX_AMOUNT..=MAX_AMOUNT, 0..=MAX_MILESTONES)
+}
+
+/// Generate an empty milestone list.
+fn empty_milestone_amounts() -> impl Strategy<Value = StdVec<i128>> {
+    Just(StdVec::new())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 fn sum(amounts: &[i128]) -> i128 {
     amounts.iter().copied().sum()
+}
+
+/// Checked sum that returns None on overflow.
+fn checked_sum(amounts: &[i128]) -> Option<i128> {
+    let mut acc: i128 = 0;
+    for &a in amounts {
+        acc = acc.checked_add(a)?;
+    }
+    Some(acc)
 }
 
 struct MilestoneTestHarness {
@@ -136,6 +161,32 @@ fn try_get_milestone(client: &EscrowClient, id: u32, ms_idx: u32) -> Option<crat
     .flatten()
 }
 
+fn try_create_contract(
+    client: &EscrowClient,
+    env: &Env,
+    client_addr: &Address,
+    freelancer_addr: &Address,
+    amounts: &[i128],
+) -> Option<u32> {
+    let ms: SorobanVec<i128> = {
+        let mut v = SorobanVec::new(env);
+        for &a in amounts {
+            v.push_back(a);
+        }
+        v
+    };
+    catch_unwind(AssertUnwindSafe(|| {
+        client.create_contract(
+            client_addr,
+            freelancer_addr,
+            &None,
+            &ms,
+            &ReleaseAuthorization::ClientOnly,
+        )
+    }))
+    .ok()
+}
+
 // ---------------------------------------------------------------------------
 // Invariant checkers
 // ---------------------------------------------------------------------------
@@ -152,6 +203,52 @@ fn check_amount_positivity(amounts: &[i128]) {
     }
 }
 
+/// INVARIANT 3b: Empty milestone list must be rejected.
+fn check_empty_milestones_rejected(
+    client: &EscrowClient,
+    env: &Env,
+    client_addr: &Address,
+    freelancer_addr: &Address,
+) {
+    let result = try_create_contract(client, env, client_addr, freelancer_addr, &[]);
+    assert!(
+        result.is_none(),
+        "Empty milestone list must be rejected at creation"
+    );
+}
+
+/// INVARIANT 3b: Non-positive amounts must be rejected.
+fn check_non_positive_amounts_rejected(
+    client: &EscrowClient,
+    env: &Env,
+    client_addr: &Address,
+    freelancer_addr: &Address,
+    amounts: &[i128],
+) {
+    let has_non_positive = amounts.iter().any(|&a| a <= 0);
+    if !has_non_positive {
+        return;
+    }
+    let result = try_create_contract(client, env, client_addr, freelancer_addr, amounts);
+    assert!(
+        result.is_none(),
+        "Non-positive milestone amounts must be rejected: {:?}",
+        amounts
+    );
+}
+
+/// INVARIANT 3b: Total sum must not overflow i128.
+fn check_total_no_overflow(amounts: &[i128]) {
+    if let Some(total) = checked_sum(amounts) {
+        assert!(
+            total <= MAX_TOTAL,
+            "Total sum {} exceeds safe bound {}",
+            total,
+            MAX_TOTAL
+        );
+    }
+}
+
 /// INVARIANT 1: Sum of milestone amounts fits within i128 and represents
 /// the total escrow obligation.
 fn check_amount_bounds(amounts: &[i128]) {
@@ -160,6 +257,12 @@ fn check_amount_bounds(amounts: &[i128]) {
         total > 0,
         "Total milestone sum must be positive, got: {}",
         total
+    );
+    assert!(
+        total <= MAX_TOTAL,
+        "Total milestone sum {} exceeds safe bound {}",
+        total,
+        MAX_TOTAL
     );
     // Ensure no individual amount exceeds the sum (sanity check).
     for (i, &amount) in amounts.iter().enumerate() {
@@ -320,6 +423,7 @@ fn check_release_monotonicity(
     let ms_after = try_get_milestone(client, contract_id, milestone_index)
         .expect("milestone should exist");
     assert!(
+        !release_ok || ms_after.released,
         ms_after.released >= released_before,
         "Release flag should be monotonic (only false->true): before={}, after={}",
         released_before,

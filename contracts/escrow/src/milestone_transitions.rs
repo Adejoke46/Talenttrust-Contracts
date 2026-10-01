@@ -204,6 +204,72 @@ pub fn store_milestone_transition(
     new_version
 }
 
+/// Atomically validates the expected version and applies a milestone transition
+/// in a single guarded operation to prevent TOCTOU races between concurrent callers.
+///
+/// This is the preferred entry point for any code path that mutates milestone
+/// status. It performs the following steps in order:
+///
+/// 1. Reads the current `(state, version)` for the milestone.
+/// 2. Verifies `expected_version` matches the stored version (optimistic
+///    concurrency check). Mismatch returns `Error::InvalidStatusTransition`.
+/// 3. Validates the requested state transition against the canonical matrix.
+/// 4. Applies the new flags and bumps the version/actor metadata.
+///
+/// Because Soroban executes a contract invocation atomically, steps 1–4 are
+/// observed as a single unit by any other invocation: a racing caller will
+/// either see the pre-transition state (and succeed) or the post-transition
+/// state (and fail the version check). Duplicate/idempotent retries with the
+/// same `expected_version` are rejected on the second attempt, which is the
+/// desired behavior for release/refund operations that must not double-spend.
+///
+/// # Arguments
+/// * `env` - The contract environment
+/// * `contract_id` - The contract ID
+/// * `milestone_index` - The milestone index
+/// * `expected_version` - The version the caller observed before deciding to act
+/// * `requested` - The desired target state
+/// * `actor` - The address performing the transition
+///
+/// # Returns
+/// * `Ok(new_version)` on success
+/// * `Err(InvalidStatusTransition)` on version mismatch or illegal transition
+/// * `Err(InvalidState)` if the stored milestone has both flags set
+pub fn apply_milestone_transition(
+    env: &Env,
+    contract_id: u32,
+    milestone_index: u32,
+    expected_version: u32,
+    requested: MilestoneState,
+    actor: Address,
+) -> Result<u32, Error> {
+    // 1. Optimistic concurrency check against the stored version.
+    check_version_for_concurrency(env, contract_id, milestone_index, expected_version)?;
+
+    // 2. Load the milestone and derive its current state.
+    let key = DataKey::Milestone(contract_id, milestone_index);
+    let mut milestone: Milestone = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::MilestoneNotFound)?;
+    let current = MilestoneState::from_milestone(&milestone)?;
+
+    // 3. Validate the requested transition against the canonical matrix.
+    validate_milestone_transition(current, requested)?;
+
+    // 4. Apply the new flags and persist the milestone before bumping metadata
+    //    so that a panic in metadata storage cannot leave flags updated without
+    //    a corresponding version bump.
+    let (released, refunded) = requested.to_flags();
+    milestone.released = released;
+    milestone.refunded = refunded;
+    env.storage().persistent().set(&key, &milestone);
+
+    let new_version = store_milestone_transition(env, contract_id, milestone_index, actor);
+    Ok(new_version)
+}
+
 /// Validates that the version matches the current stored version (optimistic concurrency check).
 ///
 /// This detects if another transaction has modified the milestone between when the caller
@@ -493,5 +559,238 @@ mod tests {
 
         let result = check_version_for_concurrency(&env, contract_id, milestone_index, 0);
         assert!(result.is_ok()); // Defaults to version 0
+    }
+
+    // ── apply_milestone_transition: concurrency & idempotency tests ──────────
+
+    fn store_milestone(env: &Env, contract_id: u32, index: u32, milestone: &Milestone) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Milestone(contract_id, index), milestone);
+    }
+
+    #[test]
+    fn test_apply_transition_pending_to_released_succeeds() {
+        let env = Env::default();
+        let contract_id = 1u32;
+        let index = 0u32;
+        let actor = Address::generate(&env);
+        store_milestone(&env, contract_id, index, &milestone_pending());
+
+        let new_version = apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Released,
+            actor,
+        )
+        .unwrap();
+        assert_eq!(new_version, 1);
+
+        let stored: Milestone = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestone(contract_id, index))
+            .unwrap();
+        assert!(stored.released);
+        assert!(!stored.refunded);
+    }
+
+    #[test]
+    fn test_apply_transition_pending_to_refunded_succeeds() {
+        let env = Env::default();
+        let contract_id = 1u32;
+        let index = 0u32;
+        let actor = Address::generate(&env);
+        store_milestone(&env, contract_id, index, &milestone_pending());
+
+        let new_version = apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Refunded,
+            actor,
+        )
+        .unwrap();
+        assert_eq!(new_version, 1);
+
+        let stored: Milestone = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestone(contract_id, index))
+            .unwrap();
+        assert!(!stored.released);
+        assert!(stored.refunded);
+    }
+
+    #[test]
+    fn test_apply_transition_rejects_stale_version() {
+        let env = Env::default();
+        let contract_id = 1u32;
+        let index = 0u32;
+        let actor = Address::generate(&env);
+        store_milestone(&env, contract_id, index, &milestone_pending());
+
+        // First transition bumps version to 1.
+        apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Released,
+            actor.clone(),
+        )
+        .unwrap();
+
+        // A racing caller that still believes version 0 must be rejected.
+        let err = apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Refunded,
+            actor,
+        )
+        .unwrap_err();
+        assert_eq!(err, Error::InvalidStatusTransition);
+
+        // State must remain Released (no partial mutation).
+        let stored: Milestone = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestone(contract_id, index))
+            .unwrap();
+        assert!(stored.released);
+        assert!(!stored.refunded);
+    }
+
+    #[test]
+    fn test_apply_transition_rejects_illegal_state_change() {
+        let env = Env::default();
+        let contract_id = 1u32;
+        let index = 0u32;
+        let actor = Address::generate(&env);
+        store_milestone(&env, contract_id, index, &milestone_released());
+
+        // Released -> Refunded is illegal even with a matching version.
+        let err = apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Refunded,
+            actor,
+        )
+        .unwrap_err();
+        assert_eq!(err, Error::InvalidStatusTransition);
+    }
+
+    #[test]
+    fn test_apply_transition_rejects_missing_milestone() {
+        let env = Env::default();
+        let contract_id = 1u32;
+        let index = 7u32;
+        let actor = Address::generate(&env);
+
+        let err = apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Released,
+            actor,
+        )
+        .unwrap_err();
+        assert_eq!(err, Error::MilestoneNotFound);
+    }
+
+    #[test]
+    fn test_apply_transition_rejects_invalid_stored_state() {
+        let env = Env::default();
+        let contract_id = 1u32;
+        let index = 0u32;
+        let actor = Address::generate(&env);
+        let mut bad = milestone_pending();
+        bad.released = true;
+        bad.refunded = true;
+        store_milestone(&env, contract_id, index, &bad);
+
+        let err = apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Released,
+            actor,
+        )
+        .unwrap_err();
+        assert_eq!(err, Error::InvalidState);
+    }
+
+    #[test]
+    fn test_apply_transition_idempotent_retry_is_rejected() {
+        let env = Env::default();
+        let contract_id = 1u32;
+        let index = 0u32;
+        let actor = Address::generate(&env);
+        store_milestone(&env, contract_id, index, &milestone_pending());
+
+        apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Released,
+            actor.clone(),
+        )
+        .unwrap();
+
+        // Retrying the same logical operation with the same observed version
+        // must fail (no double release) rather than silently no-op.
+        let err = apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Released,
+            actor,
+        )
+        .unwrap_err();
+        assert_eq!(err, Error::InvalidStatusTransition);
+    }
+
+    #[test]
+    fn test_apply_transition_sequential_calls_advance_version() {
+        let env = Env::default();
+        let contract_id = 1u32;
+        let index = 0u32;
+        let actor = Address::generate(&env);
+        store_milestone(&env, contract_id, index, &milestone_pending());
+
+        // First call: Pending -> Released at version 0.
+        let v1 = apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            0,
+            MilestoneState::Released,
+            actor.clone(),
+        )
+        .unwrap();
+        assert_eq!(v1, 1);
+
+        // Second call: idempotent Released -> Released at version 1.
+        let v2 = apply_milestone_transition(
+            &env,
+            contract_id,
+            index,
+            1,
+            MilestoneState::Released,
+            actor,
+        )
+        .unwrap();
+        assert_eq!(v2, 2);
     }
 }

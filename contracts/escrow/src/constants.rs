@@ -1,114 +1,128 @@
+//! Deterministic policy constants and checked arithmetic for the escrow contract.
+//!
+//! # Why this module exists
+//!
+//! A boundary value that decides whether an operation succeeds, fails with a
+//! typed error, or is rejected must be defined exactly once. When a limit or an
+//! increment is written as a literal at each call site, two paths that are
+//! supposed to behave identically can diverge — one wraps on overflow while the
+//! other rejects, one accepts a value while the other refuses it. Failure
+//! recovery then depends on *which* path happened to run, which is the
+//! non-determinism this module removes: every limit and every increment used by
+//! the recovery paths below is owned here and shared by every caller.
+//!
+//! # The pending reputation-credit recovery ledger
+//!
+//! `DataKey::PendingReputationCredits(freelancer)` is a durable counter of
+//! "this freelancer completed a contract and is therefore owed one reputation
+//! issuance":
+//!
+//! * **Accrual** — exactly one credit is added whenever a contract reaches
+//!   [`crate::ContractStatus::Completed`], on every terminal path (final
+//!   milestone release, batch settlement, partial-refund completion, and
+//!   arbiter dispute resolution). A fully `Refunded` contract never accrues.
+//! * **Consumption** — exactly one credit is removed by `issue_reputation`, the
+//!   only way a completion becomes a stored reputation record.
+//!
+//! # Invariants
+//!
+//! | # | Invariant |
+//! |---|-----------|
+//! | I1 | A stored ledger value is always within `0..=MAX_PENDING_REPUTATION_CREDITS`. |
+//! | I2 | An accrual changes a ledger by exactly `REPUTATION_CREDIT_INCREMENT`; a consumption removes exactly the same amount. |
+//! | I3 | Accrual past the ceiling and consumption from an empty ledger are *rejected* — never wrapped, saturated, or silently clamped. |
+//! | I4 | Rejection is reported as `None` from the pure helpers, so the caller raises a typed contract error (`Error::PotentialOverflow` / `Error::NotCompleted`) and the stored ledger is left unchanged. A retry therefore observes exactly the same state and fails the same way. |
+//!
+//! The helpers below are the only supported arithmetic for that ledger, and the
+//! `const` assertions at the end of this file turn an inconsistent policy into a
+//! compile-time failure instead of a runtime surprise.
+
 /// Minimum valid reputation rating (inclusive).
+///
+/// # Invariant
+/// `MIN_RATING >= 1` — zero is not a valid rating because absence of rating
+/// is represented by `None`, not by a zero value.  Every reputation-issuing
+/// path (`issue_reputation`) must reject `rating < MIN_RATING`.
 pub const MIN_RATING: u32 = 1;
 
 /// Maximum valid reputation rating (inclusive).
+///
+/// # Invariant
+/// `MAX_RATING >= MIN_RATING` — the valid rating interval must be non-empty.
+/// The current 1–5 scale matches common freelance platforms and is small
+/// enough to avoid precision disputes.  `issue_reputation` must reject
+/// `rating > MAX_RATING`.
 pub const MAX_RATING: u32 = 5;
 
 /// Max byte length of a reputation feedback comment.
+///
+/// # Invariant
+/// `MAX_COMMENT_BYTES >= 1` — a zero-length comment is rejected as empty; use
+/// a minimum of 1 byte so the interval `[1, MAX_COMMENT_BYTES]` is non-empty.
+/// `issue_reputation` must reject comments whose `len() > MAX_COMMENT_BYTES`.
 pub const MAX_COMMENT_BYTES: u32 = 200;
 
 /// Unit increment for pending reputation credits.
+///
+/// Every accrual adds exactly this amount and every consumption removes exactly
+/// this amount, so the ledger is a faithful count of completed contracts that
+/// have not yet been rated. It is deliberately `1`: one completed contract
+/// yields exactly one issuable reputation.
 pub const REPUTATION_CREDIT_INCREMENT: i128 = 1;
 
+/// Deterministic upper bound on a single freelancer's pending-credit ledger.
+///
+/// The ledger counts completed-but-unrated contracts, so sitting at this value
+/// indicates a bug or an attempted accounting attack rather than a legitimate
+/// workload. Accruing past it is rejected with a typed error instead of
+/// wrapping, which keeps failure recovery deterministic (see
+/// [`accrue_pending_credit`]).
+///
+/// The bound is many orders of magnitude below `i128::MAX`, so checked
+/// arithmetic can never be the first thing to fail, and it is far above any
+/// realistic number of completed contracts for a single freelancer, so it never
+/// acts as a business limit.
+pub const MAX_PENDING_REPUTATION_CREDITS: i128 = 1_000_000;
+
 /// Basis-point scaling factor for `get_average_rating` (×10_000 preserves four decimal places).
+///
+/// # Invariant
+/// `SCALE > 0` — the scaling factor must be strictly positive so that the
+/// fixed-point arithmetic used in `get_average_rating` never divides by zero
+/// and always yields a non-negative result for valid ratings.
 pub const SCALE: i128 = 10_000;
 
 /// Upper bound on the `limit` parameter of paginated read views.
 ///
 /// Keeps per-call storage reads bounded and prevents callers from requesting
 /// unbounded scans in a single invocation.
+///
+/// # Invariant
+/// `PAGE_CEILING >= 1` — at least one record per page must be returnable;
+/// a ceiling of zero would make every paginated read vacuous.
 pub const PAGE_CEILING: u32 = 50;
 
-/// -----------------------------------------------------------------------------
-/// Compatibility contracts
-/// -----------------------------------------------------------------------------
-///
-/// The constants above are part of the public compatibility contract of the
-/// escrow contract. They are consumed by off-chain clients, indexers, and the
-/// on-chain validation logic. The functions below make the invariants explicit
-/// and deterministic so that valid, duplicate, boundary, and malformed inputs all
-/// produce a reviewable, reproducible result. They do not change the values of
-/// the constants, so existing callers remain compatible.
-
-/// Returns `true` iff `rating` is within the inclusive range
-/// `[MIN_RATING, MAX_RATING]`.
-///
-/// Invariant: for any `rating`, `is_valid_rating(rating)` equals
-/// `MIN_RATING <= rating && rating <= MAX_RATING`. This is the single source of
-/// truth for rating validation and must be used by all entry points that accept
-/// a rating. Boundary values are inclusive.
-pub const fn is_valid_rating(rating: u32) -> bool {
-    rating >= MIN_RATING && rating <= MAX_RATING
-}
-
-/// Returns `true` iff the comment length is within the configured byte cap.
-///
-/// The length is measured in UTF-8 bytes to match the on-chain storage
-/// representation. An empty comment is valid (length 0).
-///
-/// Invariant: `comment_len_bytes <= MAX_COMMENT_BYTES` iff this returns `true`.
-pub const fn is_valid_comment_len(comment_len_bytes: u32) -> bool {
-    comment_len_bytes <= MAX_COMMENT_BYTES
-}
-
-/// Clamps a requested page size to the inclusive range `[1, PAGE_CEILING]`.
-///
-/// A `requested` value of 0 is treated as a request for the minimum page size
-/// (1), which preserves the existing behavior of the paginated read views while
-/// ensuring that no caller can exceed the ceiling. Values above the ceiling are
-/// clamped down to `PAGE_CEILING`.
-///
-/// Invariant: the returned value is always in `[1, PAGE_CELING`].
-pub const fn clamp_page_limit(requested: u32) -> u32 {
-    if requested == 0 {
-        return 1;
+/// Normalize a pagination request without allowing an unbounded storage scan.
+/// Zero remains valid and means "return an empty page", preserving the read
+/// API's compatibility behavior; oversized requests are safely capped.
+pub(crate) const fn normalize_page_limit(limit: u32) -> u32 {
+    if limit > PAGE_CEILING {
+        PAGE_CEILING
+    } else {
+        limit
     }
-    if requested > PAGE_CEILING {
-        return PAGE_CEILING;
-    }
-    requested
 }
 
-/// Computes the average rating in basis points (`SCALE`) from a running sum and
-/// count, without losing precision and without panicking on empty input.
-///
-/// Returns the average rounded down to the nearest basis point. If `count` is
-/// zero the function returns 0 rather than dividing by zero, so empty data is
-/// deterministic and cannot cause an unrecoverable failure.
-///
-/// Invariant: `count == 0` implies return value 0. Otherwise the return value is
-/// in `[0, MAX_RATING * SCALE]` for non-negative inputs.
-pub const fn average_rating_scaled(sum: i128, count: i128) -> i128 {
-    if count <= 0 {
-        return 0;
-    }
-    sum / count
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Applies the reputation credit increment exactly once per call.
-///
-/// This is the canonical way to accrue pending reputation credits. Because the
-/// increment is a fixed positive value, repeated calls produce a deterministic,
-/// monotonically increasing sequence and cannot overflow for realistic credit
-/// counts. Callers must not apply the increment manually in addition to this
-/// helper, otherwise credits would be double-counted.
-///
-/// Invariant: `apply_reputation_credit(current) == current + REPUTATION_CREDIT_INCREMENT`.
-pub const fn apply_reputation_credit(current: i128) -> i128 {
-    current + REPUTATION_CREDIT_INCREMENT
-}
-
-/// Returns the number of additional credits needed to reach `target` from
-/// `current`, saturating at zero when the target is already met or exceeded.
-///
-/// This is useful for batched accrual and for diagnosing partial failure: a
-/// caller can determine how many increments remain without mutating state.
-///
-/// Invariatue: the return value is always `>= 0`. If `current >= target` the
-/// result is 0.
-pub const fn credits_needed(current: i128, target: i128) -> i128 {
-    if current >= target {
-        return 0;
+    #[test]
+    fn page_limit_boundaries_are_deterministic() {
+        assert_eq!(normalize_page_limit(0), 0);
+        assert_eq!(normalize_page_limit(1), 1);
+        assert_eq!(normalize_page_limit(PAGE_CEILING), PAGE_CEILING);
+        assert_eq!(normalize_page_limit(PAGE_CEILING + 1), PAGE_CEILING);
+        assert_eq!(normalize_page_limit(u32::MAX), PAGE_CEILING);
     }
-    target - current
 }

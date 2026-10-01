@@ -1,1 +1,349 @@
-dXNlIGNyYXRlOjp0eXBlczo6Q29udHJhY3Q7CnVzZSBjcmF0ZTo6RXNjcm93RXJyb3I7CnVzZSBzb3JvYmFuX3Nkazp7c3ltYm9sX3Nob3J0LCBBZGRyZXNzLCBFbnZ9OwoKLy8vIE1heGltdW0gbnVtYmVyIG9mIGV2ZW50cyBwcm9jZXNzZWQgaW4gYSBiYXRjaCBvcGVyYXRpb25zLgpwdWIgY29uc3QgTUFYX0VWRU5UX0JBVENIX1NJWkU6IHVzaXplID0gMTAwOwoKLy8vIE1heGltdW0gbGVuZ3RoIG9mIGFuIGV2ZW50IHRvcGljIG9yIGRhdGEgc3ltYm9sIGluIGJ5dGVzLgovLy8gU29yb2JhbiBgc3ltYm9sX3Nob3J0IWAgc3VwcG9ydHMgdXAgdG8gOSBjaGFyYWN0ZXJzOyB3ZSBjYXAgYXQgOSB0byBtYXRjaAovLy8gdGhlIHN0cmljdGVzdCBleGlzdGluZyB0b3BpYyBpbiB0aGUgY29udHJhY3QgYW5kIGF2b2lkIHNpbGVudCB0cnVuY2F0aW9uLgpwdWIgY29uc3QgTUFYX0VWRU5UX1NZTUJPTF9MRU46IHUzMiA9IDk7CgovLy8gTWF4aW11bSBsZW5ndGggb2YgYSBzaW5nbGUgZXZlbnQgcGF5bG9hZCBzeW1ib2wgaW4gYnl0ZXMuCnB1YiBjb25zdCBNQVhfRVZFTlRfREFUQV9MRU46IHUzMiA9IDk7CgovLy8gTWF4aW11bSBsZW5ndGggb2YgYSBzaW5nbGUgZXZlbnQgdG9waWMgc3ltYm9sIGluIGJ5dGVzLgpwdWIgY29uc3QgTUFYX0VWRU5UX1RPUElDX0xFTjogdTMyID0gOTsKCi8vLyBTdGF0dXMgY29kZSB1c2VkIGluIHRoZSBpbmRleGVkIGV2ZW50IHBheWxvYWQgd2hlbiB0aGUgY29udHJhY3QgaXMgbm90Ci8vLyBmb3VuZC4gVGhpcyBpcyBhIHN0YWJsZSBzZW50aW5lbCB2YWx1ZSB0aGF0IG9mZi1jaGFpbiBpbmRleGVycyBjYW4gcmVseSBvbi4KcHViIGNvbnN0IEVWRU5UX1NUQVRVU19VTktOT1dOOiB1MzIgPSB1MzI6Ok1BWDsKCi8vLyBFbWl0cyBhbiBpbmRleGVkIGV2ZW50IG9uIGNvbnRyYWN0IHN0YXRlIGNoYW5nZXMgdG8gYXNzaXN0IG9mZi1jaGFpbiBpbmRleGVycwovLy8gaW4gY2hlYXBseSByZWNvbnN0cnVjdGluZyBjb250cmFjdCBsaWZlY3ljbGUgaGlzdG9yeSBhbmQgZmluYW5jaWFsIGJhbGFuY2VzLgovLy8KLy8vICMgRXZlbnQgU3BlY2lmaWNhdGlvbgovLy8gLSAqKlRvcGljKio6IGAoc3ltYm9sX3Nob3J0ISgiY29udHJhY3QiKSwgY29udHJhY3RfaWQ6IHUzMilgCi8vLyAtICoqUGF5bG9hZCoqOiBgKHN0YXR1czogdTMyLCBmdW5kZWRfYW1vdW50OiBpMTI4LCByZWxlYXNlZF9hbW91bnQ6IGkxMjgsIHJlZnVuZGVkX2Ftb3VudDogaTEyOCwgdG90YWxfZGVwb3NpdGVkOiBpMTI4KWAiCi8vLwovLy8gIyBQYW5pY3MKLy8vIC0gYEludmFsaWRDb250cmFjdElkYCBpZiBgY29udHJhY3RfaWRgIGlzIHplcm8uCi8vLyAtIGBBbW91bnRNdXNiZVBvc2l0aXZlYCBpZiBhbnkgYW1vdW50IGZpZWxkIGlzIG5lZ2F0aXZlLgpwdWIgZm4gZW1pdF9jb250cmFjdF9pbmRleGVkX2V2ZW50KGVudjogJkVudiwgY29udHJhY3RfaWQ6IHUzMiwgY29udHJhY3Q6ICZDb250cmFjdCkgewogICAgaWYgY29udHJhY3RfaWQgPT0gMCB7CiAgICAgICAgZW52LnBhbmljX3dpdGhfZXJyb3IoRXNjcm93RXJyb3I6OkludmFsaWRDb250cmFjdElkKTsKICAgIH0KCiAgICB2YWxpZGF0ZV9ldmVudF9hbW91bnRzKAogICAgICAgIGNvbnRyYWN0LmZ1bmRlZF9hbW91bnQsCiAgICAgICAgY29udHJhY3QucmVsZWFzZWRfYW1vdW50LAogICAgICAgIGNvbnRyYWN0LnJlZnVuZGVkX2Ftb3VudCwKICAgICAgICBjb250cmFjdC50b3RhbF9kZXBvc2l0ZWQsCiAgICApCiAgICAudW53cmFwX29yX2Vsc2UofGV8IGVudi5wYW5pY193aXRoX2Vycm9yKGUpKTsKCiAgICBlbnYuZXZlbnRzKCkucHVibGlzaCgKICAgICAgICAoc3ltYm9sX3Nob3J0ISgiY29udHJhY3QiKSwgY29udHJhY3RfaWQpLAogICAgICAgICgKICAgICAgICAgICAgY29udHJhY3Quc3RhdHVzIGFzIHUzMiwKICAgICAgICAgICAgY29udHJhY3QuZnVuZGVkX2Ftb3VudCwKICAgICAgICAgICAgY29udHJhY3QucmVsZWFzZWRfYW1vdW50LAogICAgICAgICAgICBjb250cmFjdC5yZWZ1bmRlZF9hbW91bnQsCiAgICAgICAgICAgIGNvbnRyYWN0LnRvdGFsX2RlcG9zaXRlZCwKICAgICAgICApLAogICAgKTsKfQoKLy8vIFZhbGlkYXRlIHRoYXQgZXZlbnQgcGF5bG9hZCBhbW91bnRzIGFyZSBub24tbmVnYXRpdmUuCi8vLyBSZXR1cm5zIGBPaygoKWAgd2hlbiBhbGwgYW1vdW50cyBhcmUgPj0gMC4KcHViKGNyYXRlKSBmbiB2YWxpZGF0ZV9ldmVudF9hbW91bnRzKAogICAgZnVuZGVkX2Ftb3VudDogaTEyOCwKICAgIHJlbGVhc2VkX2Ftb3VudDogaTEyOCwKICAgIHJlZnVuZGVkX2Ftb3VudDogaTEyOCwKICAgIHRvdGFsX2RlcG9zaXRlZDogaTEyOCwKKSAtPiBSZXN1bHQ8KCksIGNyYXRlOjpFc2Nyb3dFcnJvcj4gewogICAgaWYgZnVuZGVkX2Ftb3VudCA8IDAgfHwgcmVsZWFzZWRfYW1vdW50IDwgMCB8fCByZWZ1bmRlZF9hbW91bnQgPCAwIHx8IHRvdGFsX2RlcG9zaXRlZCA8IDAgewogICAgICAgIHJldHVybiBFcnIoRXNjcm93RXJyb3I6OkFtb3VudE11c3RCZVBvc2l0aXZlKTsKICAgIH0KICAgIE9rKCgpKQp9CgovLy8gVmFsaWRhdGUgdGhlIGxlbmd0aCBvZiBhIHN5bWJvbCB1c2VkIGFzIGFuIGV2ZW50IHRvcGljIG9yIHBheWxvYWQuCi8vLwovLy8gVGhpcyBpcyB0aGUgY29tcGF0aWJpbGl0eSBjb250cmFjdCBmb3IgdGhlIGJhdGNoIGV2ZW50IGVudHJ5IHBvaW50czoKLy8vIGBTeW1ib2w6Om5ld2Agc2lsZW50bHkgdHJ1bmNhdGVzIGF0IDkgYnl0ZXMsIHNvIGEgY2FsbGVyIHRoYXQgc3VibWl0cyBhCi8vLyBsb25nZXIgc3ltYm9sIHdvdWxkIG90aGVyd2lzZSByZWNlaXZlIGFuIGV2ZW50IHdpdGggYSBkaWZmZXJlbnQgdG9waWMgdGhhbgovLy8gdGhlIG9uZSB0aGV5IGFza2VkIGZvci4gUmVqZWN0aW5nIGl0IGV4cGxpY2l0bHkga2VlcHMgdGhlIHB1YmxpYyBiZWhhdmlvcgovLy8gZGV0ZXJtaW5pc3RpYyBhbmQgcHJlc2VydmVzIHRoZSB0b3BpYyBjb250cmFjdCBmb3IgZXhpc3RpbmcgY2FsbGVycy4KcHViKGNyYXRlKSBmbiB2YWxpZGF0ZV9ldmVudF9zeW1ib2xfbGVuKAogICAgc3ltYm9sOiAmc29yb2Jhbl9zZGs6OlN5bWJvbCwKICAgIG1heF9sZW46IHUzMiwKKSAtPiBSZXN1bHQ8KCksIGNyYXRlOjpFc2Nyb3dFcnJvcj4gewogICAgaWYgc3ltYm9sLmxlbigpID4gbWF4X2xlbiB7CiAgICAgICAgcmV0dXJuIEVycihFc2Nyb3dFcnJvcjo6SW52YWxpZFByb3RvY29sUGFyYW1ldGVycyk7CiAgICB9CiAgICBPaygoKSkKfQoKLy8vIFZhbGlkYXRlIGEgc2luZ2xlIGJhdGNoIGV2ZW50IGl0ZW0gYWdhaW5zdCB0aGUgY29tcGF0aWJpbGl0eSBjb250cmFjdC4KLy8vCi8vLyBUaGUgY29udHJhY3QgaXMgdGhlIHB1YmxpYyBzaGFwZSBvZiB0aGUgZXZlbnQgZW1pdHRlZCBieSBgYmF0Y2hfZXZlbnRzYAovLy8gYW5kIGl0cyBhbGlhc2VzOgovLy8gLSAqKlRvcGljKio6IGAodG9waWMsIGNvbnRyYWN0X2lkKWAgaW4gdGhlIG9yZGVyIHN1cHBsaWVkIGJ5IHRoZSBjYWxsZXIuCi8vLyAtICoqUGF5bG9hZCoqOiB0aGUgYGRhdGFgIHN5bWJvbC4KLy8vCi8vLyBSZWplY3RzIGFuIGl0ZW0gd2hlbiB0aGUgY29udHJhY3QgaWQgaXMgemVybyAobm8gcmVhbCBjb250cmFjdCBjYW4gaGF2ZQovLy8gaWQgMCksIHdoZW4gZWl0aGVyIHN5bWJvbCBleGNlZWRzIHRoZSBtYXhpbXVtIGxlbmd0aCwgb3Igd2hlbiB0aGUgdG9waWMK Ly8vIGlzIGVtcHR5LiBUaGlzIG1ha2VzIHRoZSBmYWlsdXJlIG1vZGUgZGV0ZXJtaW5pc3RpYyBpbnN0ZWFkIG9mIGEgc2lsZW50Ci8vLyB0cnVuY2F0aW9uIG9yIGFuIGV2ZW50IHRoYXQgaW5kZXhlcnMgY2Fubm90IGF0dHJpYnV0ZSB0byBhIGNvbnRyYWN0LgpwdWIoY3JhdGUpIGZuIHZhbGlkYXRlX2JhdGNoX2V2ZW50X2l0ZW0oCiAgICB0b3BpYzogJnNvcm9iYW5fc2RrOjpTeW1ib2wsCiAgICBjb250cmFjdF9pZDogdTMyLAogICAgZGF0YTogJnNvcm9iYW5fc2RrOjpTeW1ib2wsCikgLT4gUmVzdWx0PCgpLCBjcmF0ZTo6RXNjcm93RXJyb3I+IHsKICAgIGlmIGNvbnRyYWN0X2lkID09IDAgewogICAgICAgIHJldHVybiBFcnIoRXNjcm93RXJyb3I6OkludmFsaWRDb250cmFjdElkKTsKICAgIH0KICAgIGlmIHRvcGljLmxlbigpID09IDAgewogICAgICAgIHJldHVybiBFcnIoRXNjcm93RXJyb3I6OkludmFsaWRQcm90b2NvbFBhcmFtZXRlcnMpOwogICAgfQogICAgdmFsaWRhdGVfZXZlbnRfc3ltYm9sX2xlbih0b3BpYywgTUFYX0VWRU5UX1RPUElDX0xFTik/OwogICAgdmFsaWRhdGVfZXZlbnRfc3ltYm9sX2xlbihkYXRhLCBNQVhfRVZFTlRfREFUQV9MRU4pPzsKICAgIE9rKCgpKQp9CgovLy8gRW1pdHMgYW4gaW5kZXhlZCBldmVudCB3aGVuIGEgZGlzcHV0ZSBpcyBvcGVuZWQgb24gYSBjb250cmFjdC4KLy8vCi8vLyAjIEV2ZW50IFNwZWNpZmljYXRpb24KLy8vIC0gKipUb3BpYyoqOiBgKHN5bWJvbF9zaG9ydCEoImRpc3B1dGUiKSwgc3ltYm9sX3Nob3J0ISgib3BlbmVkIikpYAovLy8gLSAqKlBheWxvYWQqKjogYChjb250cmFjdF9pZDogdTMyLCBjYWxsZXI6IEFkZHJlc3MsIGZ1bmRlZF9hbW91bnQ6IGkxMjgsIHJlbGVhc2VkX2Ftb3VudDogaTEyOCwgcmVmdW5kZWRfYW1vdW50OiBpMTI4KWAiCi8vLwovLy8gIyBQYW5pY3MKLy8vIC0gYEludmFsaWRDb250cmFjdElkYCBpZiBgY29udHJhY3RfaWRgIGlzIHplcm8uCi8vLyAtIGBBbW91bnRNdXNiZVBvc2l0aXZlYCBpZiBhbnkgYW1vdW50IGZpZWxkIGlzIG5lZ2F0aXZlLgpwdWIgZm4gZW1pdF9kaXNwdXRlX29wZW5lZF9ldmVudCgKICAgIGVudjogJkVudiwKICAgIGNvbnRyYWN0X2lkOiB1MzIsCiAgICBjYWxsZXI6ICZBZGRyZXNzLAogICAgY29udHJhY3Q6ICZDb250cmFjdCwKKSB7CiAgICBpZiBjb250cmFjdF9pZCA9PSAwIHsKICAgICAgICBlbnYucGFuaWNfd2l0aF9lcnJvcihFc2Nyb3dFcnJvcjo6SW52YWxpZENvbnRyYWN0SWQpOwogICAgfQoKICAgIHZhbGlkYXRlX2V2ZW50X2Ftb3VudHMoCiAgICAgICAgY29udHJhY3QuZnVuZGVkX2Ftb3VudCwKICAgICAgICBjb250cmFjdC5yZWxlYXNlZF9hbW91bnQsCiAgICAgICAgY29udHJhY3QucmVmdW5kZWRfYW1vdW50LAogICAgICAgIGNvbnRyYWN0LnRvdGFsX2RlcG9zaXRlZCwKICAgICkKICAgIC51bndyYXBfb3JfZWxzZSh8ZXwgZW52LnBhbmljX3dpdGhfZXJyb3IoZSkpOwoKICAgIGVudi5ldmVudHMoKS5wdWJsaXNoKAogICAgICAgIChzeW1ib2xfc2hvcnQhKCJkaXNwdXRlIiksIHN5bWJvbF9zaG9ydCEoIm9wZW5lZCIpKSwKICAgICAgICAoCiAgICAgICAgICAgIGNvbnRyYWN0X2lkLAogICAgICAgICAgICBjYWxsZXIuY2xvbmUoKSwKICAgICAgICAgICAgY29udHJhY3QuZnVuZGVkX2Ftb3VudCwKICAgICAgICAgICAgY29udHJhY3QucmVsZWFzZWRfYW1vdW50LAogICAgICAgICAgICBjb250cmFjdC5yZWZ1bmRlZF9hbW91bnQsCiAgICAgICAgKSwKICAgICk7Cn0KCi8vLyBFbWl0cyBhbiBpbmRleGVkIGV2ZW50IHdoZW4gYSBkaXNwdXRlIGlzIHJlc29sdmVkLgovLy8KLy8vICMgRXZlbnQgU3BlY2lmaWNhdGlvbgovLy8gLSAqKlRvcGljKio6IGAoc3ltYm9sX3Nob3J0ISgiZGlzcHV0ZSIpLCBzeW1ib2xfc2hvcnQhKCJyZXNvbHZlZCIpKWAiCi8vLyAtICoqUGF5bG9hZCoqOiBgKGNvbnRyYWN0X2lkOiB1MzIsIGNsaWVudF9wYXlvdXQ6IGkxMjgsIGZyZWVsYW5jZXJfcGF5b3V0OiBpMTI4LCByZXNvbHV0aW9uX2NvZGU6IHUzMiwgZmluYWxfc3RhdHVzOiB1MzIpYAovLy8KLy8vICMgUGFuaWNzCi8vLyAtIGBJbnZhbGlkQ29udHJhY3RJZGAgaWYgYGNvbnRyYWN0X2lkYCBpcyB6ZXJvLgovLy8gLSBgQW1vdW50TXVzdEJlUG9zaXRpdmVgIGlmIGFueSBwYXlvdXQgaXMgbmVnYXRpdmUuCnB1YiBmbiBlbWl0X2Rpc3B1dGVfcmVzb2x2ZWRfZXZlbnQoCiAgICBlbnY6ICZFbnYsCiAgICBjb250cmFjdF9pZDogdTMyLAogICAgY2xpZW50X3BheW91dDogaTEyOCwKICAgIGZyZWVsYW5jZXJfcGF5b3V0OiBpMTI4LAogICAgcmVzb2x1dGlvbl9jb2RlOiB1MzIsCiAgICBmaW5hbF9zdGF0dXM6IGNyYXRlOjp0eXBlczo6Q29udHJhY3RTdGF0dXMsCikgewogICAgaWYgY29udHJhY3RfaWQgPT0gMCB7CiAgICAgICAgZW52LnBhbmljX3dpdGhfZXJyb3IoRXNjcm93RXJyb3I6OkludmFsaWRDb250cmFjdElkKTsKICAgIH0KCiAgICBpZiBjbGllbnRfcGF5b3V0IDwgMCB8fCBmcmVlbGFuY2VyX3BheW91dCA8IDAgewogICAgICAgIGVudi5wYW5pY193aXRoX2Vycm9yKEVzY3Jvd0Vycm9yOjpBbW91bnRNdXN0QmVQb3NpdGl2ZSk7CiAgICB9CgogICAgZW52LmV2ZW50cygpLnB1Ymxpc2goCiAgICAgICAgKHN5bWJvbF9zaG9ydCEoImRpc3B1dGUiKSwgc3ltYm9sX3Nob3J0ISgicmVzb2x2ZWQiKSksCiAgICAgICAgKAogICAgICAgICAgICBjb250cmFjdF9pZCwKICAgICAgICAgICAgY2xpZW50X3BheW91dCwKICAgICAgICAgICAgZnJlZWxhbmNlcl9wYXlvdXQsCiAgICAgICAgICAgIHJlc29sdXRpb25fY29kZSwKICAgICAgICAgICAgZmluYWxfc3RhdHVzIGFzIHUzMiwKICAgICAgICApLAogICAgKTsKfQoKLy8vIEVtaXRzIGFuIGV2ZW50IHdoZW4gYSBtaWxlc3RvbmUgaXMgcmVsZWFzZWQgdG8gYSBmcmVlbGFuY2VyLgovLy8KLy8vICMgUGFuaWNzCi8vLyAtIGBJbnZhbGlkQ29udHJhY3RJZGAgaWYgYGNvbnRyYWN0X2lkYCBpcyB6ZXJvLgovLy8gLSBgQW1vdW50TXVzdEJlUG9zaXRpdmVgIGlmIGFueSBhbW91bnQgaXMgbmVnYXRpdmUuCnB1YiBmbiBlbWl0X21pbGVzdG9uZV9yZWxlYXNlZF9ldmVudCgKICAgIGVudjogJkVudiwKICAgIGNvbnRyYWN0X2lkOiB1MzIsCiAgICBtaWxlc3RvbmVfaW5kZXg6IHUzMiwKICAgIGFtb3VudDogaTEyOCwKICAgIGdyb3NzX2Ftb3VudDogaTEyOCwKICAgIGZlZTogaTEyOCwKICAgIHJlY2lwaWVudDogJkFkZHJlc3MsCikgewogICAgaWYgY29udHJhY3RfaWQgPT0gMCB7CiAgICAgICAgZW52LnBhbmljX3dpdGhfZXJyb3IoRXNjcm93RXJyb3I6OkludmFsaWRDb250cmFjdElkKTsKICAgIH0KCiAgICBpZiBhbW91bnQgPCAwIHx8IGdyb3NzX2Ftb3VudCA8IDAgfHwgZmVlIDwgMCB7CiAgICAgICAgZW52LnBhbmljX3dpdGhfZXJyb3IoRXNjcm93RXJyb3I6OkFtb3VudE11c3RCZVBvc2l0aXZlKTsKICAgIH0KCiAgICBlbnYuZXZlbnRzKCkucHVibGlzaCgKICAgICAgICAoc3ltYm9sX3Nob3J0ISgibWlsZXN0b25lIiksIHN5bWJvbF9zaG9ydCEoInJlbGVhc2UiKSksCiAgICAgICAgKAogICAgICAgICAgICBjb250cmFjdF9pZCwKICAgICAgICAgICAgbWlsZXN0b25lX2luZGV4LAogICAgICAgICAgICBhbW91bnQsCiAgICAgICAgICAgIGdyb3NzX2Ftb3VudCwKICAgICAgICAgICAgZmVlLAogICAgICAgICAgICByZWNpcGllbnQuY2xvbmUoKSwKICAgICAgICAgICAgZW52LmxlZGdlci50aW1lc3RhbXAoKSwKICAgICAgICApLAogICAgKTsKfQoKLy8vIEVtaXRzIGFuIGV2ZW50IHdoZW4gYSBtaWxlc3RvbmUgaXMgcmVmdW5kZWQgdG8gdGhlIGNsaWVudC4KLy8vCi8vLyAjIFBhbmljcwovLy8gLSBgSW52YWxpZENvbnRyYWN0SWRgIGlmIGBjb250cmFjdF9pZGAgaXMgemVyby4KLy8vIC0gYEFtb3VudE11c3RCZVBvc2l0aXZlYCBpZiBgYW1vdW50YCBpcyBuZWdhdGl2ZS4KcHViIGZuIGVtaXRfbWlsZXN0b25lX3JlZnVuZGVkX2V2ZW50KAogICAgZW52OiAmRW52LAogICAgY29udHJhY3RfaWQ6IHUzMiwKICAgIG1pbGVzdG9uZV9pbmRleDogdTMyLAogICAgYW1vdW50OiBpMTI4LAogICAgcmVjaXBpZW50OiAmQWRkcmVzcywKKSB7CiAgICBpZiBjb250cmFjdF9pZCA9PSAwIHsKICAgICAgICBlbnYucGFuaWNfd2l0aF9lcnJvcihFc2Nyb3dFcnJvcjo6SW52YWxpZENvbnRyYWN0SWQpOwogICAgfQoKICAgIGlmIGFtb3VudCA8IDAgewogICAgICAgIGVudi5wYW5pY193aXRoX2Vycm9yKEVzY3Jvd0Vycm9yOjpBbW91bnRNdXN0QmVQb3NpdGl2ZSk7CiAgICB9CgogICAgZW52LmV2ZW50cygpLnB1Ymxpc2goCiAgICAgICAgKHN5bWJvbF9zaG9ydCEoIm1pbGVzdG9uZSIpLCBzeW1ib2xfc2hvcnQhKCJyZWZ1bmQiKSksCiAgICAgICAgKAogICAgICAgICAgICBjb250cmFjdF9pZCwKICAgICAgICAgICAgbWlsZXN0b25lX2luZGV4LAogICAgICAgICAgICBhbW91bnQsCiAgICAgICAgICAgIHJlY2lwaWVudC5jbG9uZSgpLAogICAgICAgICAgICBlbnYubGVkZ2VyKCkudGltZXN0YW1wKCksCiAgICAgICAgKSwKICAgICk7Cn0KCi8vLyBFbWl0cyBhbiBldmVudCB3aGVuIGEgbWlsZXN0b25lIGlzIGFwcHJvdmVkIGJ5IGNsaWVudCBvciBhcmJpdGVyLgovLy8KLy8vICMgUGFuaWNzCi8vLyAtIGBJbnZhbGlkQ29udHJhY3RJZGAgaWYgYGNvbnRyYWN0X2lkYCBpcyB6ZXJvLgpwdWIgZm4gZW1pdF9taWxlc3RvbmVfYXBwcm92ZWRfZXZlbnQoCiAgICBlbnY6ICZFbnYsCiAgICBjb250cmFjdF9pZDogdTMyLAogICAgbWlsZXN0b25lX2luZGV4OiB1MzIsCiAgICBhcHByb3ZlcjogJkFkZHJlc3MsCikgewogICAgaWYgY29udHJhY3RfaWQgPT0gMCB7CiAgICAgICAgZW52LnBhbmljX3dpdGhfZXJyb3IoRXNjcm93RXJyb3I6OkludmFsaWRDb250cmFjdElkKTsKICAgIH0KCiAgICBlbnYuZXZlbnRzKCkucHVibGlzaCgKICAgICAgICAoc3ltYm9sX3Nob3J0ISgibWlsZXN0b25lIiksIHN5bWJvbF9zaG9ydCEoImFwcHJvdmVkIikpLAogICAgICAgICgKICAgICAgICAgICAgY29udHJhY3RfaWQsCiAgICAgICAgICAgIG1pbGVzdG9uZV9pbmRleCwKICAgICAgICAgICAgYXBwcm92ZXIuY2xvbmUoKSwKICAgICAgICAgICAgZW52LmxlZGdlci50aW1lc3RhbXAoKSwKICAgICAgICApLAogICAgKTsKfQoKLy8vIEVtaXRzIGFuIGV2ZW50IHdoZW4gd29yayBldmlkZW5jZSBpcyBzdWJtaXR0ZWQgZm9yIGEgbWlsZXN0b25lLgovLy8KLy8vICMgUGFuaWNzCi8vLyAtIGBJbnZhbGlkQ29udHJhY3RJZGAgaWYgYGNvbnRyYWN0X2lkYCBpcyB6ZXJvLgpwdWIgZm4gZW1pdF93b3JrX2V2aWRlbmNlX3N1Ym1pdHRlZF9ldmVudCgKICAgIGVudjogJkVudiwKICAgIGNvbnRyYWN0X2lkOiB1MzIsCiAgICBtaWxlc3RvbmVfaW5kZXg6IHUzMiwKICAgIHN1Ym1pdHRlcjogJkFkZHJlc3MsCiAgICBldmlkZW5jZTogJnNvcm9iYW5fc2RrOjpTdHJpbmcsCikgewogICAgaWYgY29udHJhY3RfaWQgPT0gMCB7CiAgICAgICAgZW52LnBhbmljX3dpdGhfZXJyb3IoRXNjcm93RXJyb3I6OkludmFsaWRDb250cmFjdElkKTsKICAgIH0KCiAgICBlbnYuZXZlbnRzKCkucHVibGlzaCgKICAgICAgICAoc3ltYm9sX3Nob3J0ISgibWlsZXN0b25lIiksIHN5bWJvbF9zaG9ydCEoImV2aWRlbmNlIikpLAogICAgICAgICgKICAgICAgICAgICAgY29udHJhY3RfaWQsCiAgICAgICAgICAgIG1pbGVzdG9uZV9pbmRleCwKICAgICAgICAgICAgc3VibWl0dGVyLmNsb25lKCksCiAgICAgICAgICAgIGV2aWRlbmNlLmNsb25lKCksCiAgICAgICAgICAgIGVudi5sZWRnZXIoKS50aW1lc3RhbXAoKSwKICAgICAgICApLAogICAgKTsKfQo=
+use crate::types::Contract;
+use crate::EscrowError;
+use soroban_sdk:{symbol_short, Address, Env};
+
+#[soroban_sdk::contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EventInput {
+    pub topic: soroban_sdk:Symbol,
+    pub contract_id: u32,
+    pub data: soroban_sdk:Symbol,
+}
+
+/// Maximum number of events processed in a batch operations.
+pub const MAX_EVENT_BATCH_SIZE: usize = 100;
+
+/// Emits an indexed event on contract state changes to assist off-chain indexers
+/// in cheaply reconstructing contract lifecycle history and financial balances.
+///
+/// # Event Specification
+/// - Panics:
+///   - `InvalidContractId` if `contract_id` is zero.
+///   - `AmountMustBePositive` if any amount field is negative.
+/// - Ensures the invariant that the escrow accounting identity holds:
+///   `total_deposited == funded_amount + released_amount + refunded_amount`.
+///   Violations panic with `InvariantViolation` so that bad state cannot be
+///   silently published to indexers.
+pub fn emit_contract_indexed_event(env: &Env, contract_id: u32, contract: &Contract) {
+    if contract_id == 0 {
+        env.panic_with_error(EscrowError::InvalidContractId);
+    }
+
+    validate_event_amounts(
+        contract.funded_amount,
+        contract.released_amount,
+        contract.refunded_amount,
+        contract.total_deposited,
+    )
+    .unwrap_or_else(|e| env.panic_with_error(e));
+
+    validate_contract_invariants(contract)
+        .unwrap_or_else(|e| env.panic_with_error(e));
+
+    env.events().publish(
+        (symbol_short!("contract"), contract_id),
+        (
+            contract.status as u32,
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+            contract.total_deposited,
+        ),
+    );
+}
+
+/// Validate that event payload amounts are non-negative and satisfy accounting invariants.
+/// Returns `Ok(())` when all amounts are >= 0 and sum correctly.
+pub(crate) fn validate_event_amounts(
+    funded_amount: i128,
+    released_amount: i128,
+    refunded_amount: i128,
+    total_deposited: i128,
+) -> Result<(), crate::EscrowError> {
+    if funded_amount < 0 || released_amount < 0 || refunded_amount < 0 || total_deposited < 0 {
+        return Err(EscrowError::AmountMustBePositive);
+    }
+
+    // Invariant: The sum of funded (currently in escrow), released (paid to freelancer),
+    // and refunded (returned to client) MUST exactly equal total_deposited.
+    let sum_1 = funded_amount
+        .checked_add(released_amount)
+        .ok_or(EscrowError::AccountingInvariantViolated)?;
+    let total_accounted = sum_1
+        .checked_add(refunded_amount)
+        .ok_or(EscrowError::AccountingInvariantViolated)?;
+
+    if total_accounted != total_deposited {
+        return Err(EscrowError::AccountingInvariantViolated);
+    }
+
+    Ok(())
+}
+
+/// Validate the accounting invariants of a contract before publishing an
+/// indexed event. This guarantees off-chain indexers never observe a state
+/// where the escrow balance identity is broken.
+///
+/// Invariants enforced:
+/// - All amounts are non-negative.
+/// - `total_deposited == funded_amount + released_amount + refunded_amount`
+///   (the conservation of funds identity).
+/// - `released_amount` and `refunded_amount` are each bounded by the
+///   total deposited.
+///
+/// Returns `Err(InvariantViolation)` when any invariant is broken.
+pub(crate) fn validate_contract_invariants(
+    contract: &Contract,
+) -> Result<(), crate::EscrowError> {
+    // Re-check non-negativity so this function is safe to call independently.
+    validate_event_amounts(
+        contract.funded_amount,
+        contract.released_amount,
+        contract.refunded_amount,
+        contract.total_deposited,
+    )?;
+
+    // Conservation of funds: total deposited must equal the sum of the
+    // funded, released, and refunded amounts. Use checked addition to
+    // avoid silent overflow in debug builds.
+    let committed = contract
+        .funded_amount
+        .checked_add(contract.released_amount)
+        .and_then(|v| v.checked_add(contract.refunded_amount));
+
+    match committed {
+        Some(total) if total == contract.total_deposited => {}
+        _ => return Err(EscrowError::InvariantViolation),
+    }
+
+    // Released and refunded amounts cannot exceed the total deposited.
+    if contract.released_amount > contract.total_deposited
+        || contract.refunded_amount > contract.total_deposited
+    {
+        return Err(EscrowError::InvariantViolation);
+    }
+
+    Ok(())
+}
+
+/// Emits an indexed event when a dispute is opened on a contract.
+///
+/// # Event Specification
+/// - Topic: (symbol_short!("dispute"), symbol_short!("opened"))
+/// - Payload: (contract_id: u32, caller: Address, funded_amount: i128, released_amount: i128, refunded_amount: i128)
+///
+/// # Panics
+/// - `InvalidContractId` if `contract_id` is zero.
+/// - `AmountMustBePositive` if any amount field is negative.
+/// - `InvariantViolation` if the conservation of funds identity is broken.
+pub fn emit_dispute_opened_event(
+    env: &Env,
+    contract_id: u32,
+    caller: &Address,
+    contract: &Contract,
+) {
+    if contract_id == 0 {
+        env.panic_with_error(EscrowError::InvalidContractId);
+    }
+
+    validate_contract_invariants(contract)
+        .unwrap_or_else(|e| env.panic_with_error(e));
+
+    env.events().publish(
+        (symbol_short!("dispute"), symbol_short!("opened")),
+        (
+            contract_id,
+            caller.clone(),
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+        ),
+    );
+
+    true
+}
+
+/// Emits an indexed event when a dispute is resolved.
+///
+/// # Event Specification
+/// - Topic: (symbol_short!("dispute"), symbol_short!("resolved"))
+/// - Payload: (contract_id: u32, client_payout: i128, freelancer_payout: i128, resolution_code: u32, final_status: u32)
+///
+/// # Panics
+/// - `InvalidContractId` if `contract_id` is zero.
+/// - `AmountMustBePositive` if any payout is negative.
+/// - `InvariantViolation` if the combined payouts overflow or are
+///   inconsistent with the contract's funded amount.
+pub fn emit_dispute_resolved_event(
+    env: &Env,
+    contract_id: u32,
+    client_payout: i128,
+    freelancer_payout: i128,
+    resolution_code: u32,
+    final_status: crate::types::ContractStatus,
+) {
+    if contract_id == 0 {
+        env.panic_with_error(EscrowError::InvalidContractId);
+    }
+
+    if client_payout < 0 || freelancer_payout < 0 {
+        env.panic_with_error(EscrowError::AmountMustBePositive);
+    }
+
+    // Payouts cannot overflow when combined.
+    if client_payout.checked_add(freelancer_payout).is_none() {
+        env.panic_with_error(EscrowError::InvariantViolation);
+    }
+
+    env.events().publish(
+        (symbol_short!("dispute"), symbol_short!("resolved")),
+        (
+            contract_id,
+            client_payout,
+            freelancer_payout,
+            resolution_code,
+            final_status as u32,
+        ),
+    );
+
+    true
+}
+
+/// Emits an event when a milestone is released to a freelancer.
+///
+/// # Panics
+/// - `InvalidContractId` if `contract_id` is zero.
+/// - `AmountMustBePositive` if `amount`, `gross_amount`, or `fee` is negative.
+/// - `InvariantViolation` if `fee > gross_amount` or `amount != gross_amount - fee`.
+pub fn emit_milestone_released_event(
+    env: &Env,
+    contract_id: u32,
+    milestone_index: u32,
+    amount: i128,
+    gross_amount: i128,
+    fee: i128,
+    recipient: &Address,
+) {
+    if contract_id == 0 {
+        env.panic_with_error(EscrowError::InvalidContractId);
+    }
+
+    if amount < 0 || gross_amount < 0 || fee < 0 {
+        env.panic_with_error(EscrowError::AmountMustBePositive);
+    }
+
+    // Net amount must equal gross minus fee, and fee cannot exceed gross.
+    if fee > gross_amount {
+        env.panic_with_error(EscrowError::InvariantViolation);
+    }
+
+    match gross_amount.checked_sub(fee) {
+        Some(net) if net == amount => {}
+        _ => env.panic_with_error(EscrowError::InvariantViolation),
+    }
+
+    env.events().publish(
+        (symbol_short!("milestone"), symbol_short!("release")),
+        (
+            contract_id,
+            milestone_index,
+            amount,
+            gross_amount,
+            fee,
+            recipient.clone(),
+            env.ledger().timestamp(),
+        ),
+    );
+
+    true
+}
+
+/// Emits an event when a milestone is refunded to the client.
+///
+/// # Panics
+/// - `InvalidContractId` if `contract_id` is zero.
+/// - `AmountMustBePositive` if `amount` is negative.
+pub fn emit_milestone_refunded_event(
+    env: &Env,
+    contract_id: u32,
+    milestone_index: u32,
+    amount: i128,
+    recipient: &Address,
+) {
+    if contract_id == 0 {
+        env.panic_with_error(EscrowError::InvalidContractId);
+    }
+
+    if amount < 0 {
+        env.panic_with_error(EscrowError::AmountMustBePositive);
+    }
+
+    env.events().publish(
+        (symbol_short!("milestone"), symbol_short!("refund")),
+        (
+            contract_id,
+            milestone_index,
+            amount,
+            recipient.clone(),
+            env.ledger().timestamp(),
+        ),
+    );
+
+    true
+}
+
+/// Emits an event when a milestone is approved by client or arbiter.
+///
+/// # Panics
+/// - `InvalidContractId` if `contract_id` is zero.
+pub fn emit_milestone_approved_event(
+    env: &Env,
+    contract_id: u32,
+    milestone_index: u32,
+    approver: &Address,
+) {
+    if contract_id == 0 {
+        env.panic_with_error(EscrowError::InvalidContractId);
+    }
+
+    env.events().publish(
+        (symbol_short!("milestone"), symbol_short!("approved")),
+        (
+            contract_id,
+            milestone_index,
+            approver.clone(),
+            env.ledger().timestamp(),
+        ),
+    );
+
+    true
+}
+
+/// Emits an event when work evidence is submitted for a milestone.
+///
+/// # Panics
+/// - `InvalidContractId` if `contract_id` is zero.
+pub fn emit_work_evidence_submitted_event(
+    env: &Env,
+    contract_id: u32,
+    milestone_index: u32,
+    submitter: &Address,
+    evidence: &soroban_sdk:Symbol,
+) {
+    if contract_id == 0 {
+        env.panic_with_error(EscrowError::InvalidContractId);
+    }
+
+    env.events().publish(
+        (symbol_short!("milestone"), symbol_short!("evidence")),
+        (
+            contract_id,
+            milestone_index,
+            submitter.clone(),
+            evidence.clone(),
+            env.ledger().timestamp(),
+        ),
+    );
+
+    true
+}

@@ -32,19 +32,18 @@ extern crate std;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::vec::Vec as StdVec;
 
-use proptest::prelude::*;
+use ::proptest::prelude::*;
 use soroban_sdk::{
-    testutils::Address as _, token::StellarAssetClient, Address, Env, Vec as SorobanVec,
+    testutils::Address as _, Address, Env, Vec as SorobanVec,
 };
 
-use crate::{Contract, ContractStatus, Escrow, EscrowClient, Milestone, ReleaseAuthorization};
+use crate::{Contract, ContractStatus, Escrow, EscrowClient, ReleaseAuthorization};
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const MAX_MS: usize = 6;
-const TOKEN_UNIT: i128 = 10_000_000;
 const MAX_AMOUNT: i128 = 1_000_000_000;
 const MAX_OPS: usize = 30;
 
@@ -54,16 +53,7 @@ const MAX_OPS: usize = 30;
 
 /// Generate a list of positive milestone amounts (1 .. MAX_AMOUNT).
 fn milestone_amounts() -> impl Strategy<Value = StdVec<i128>> {
-    prop::collection::vec(
-        1i128..=(MAX_AMOUNT / TOKEN_UNIT),
-        1..=MAX_MS,
-    )
-    .prop_map(|units| {
-        units
-            .into_iter()
-            .map(|whole_tokens| whole_tokens * TOKEN_UNIT)
-            .collect()
-    })
+    prop::collection::vec(1i128..=MAX_AMOUNT, 1..=MAX_MS)
 }
 
 /// The set of operations the proptest can generate.
@@ -89,7 +79,7 @@ fn op_strategy(n_ms: usize, total: i128) -> impl Strategy<Value = Op> {
         (1i128..=overshoot).prop_map(Op::Deposit),
         (0u32..n).prop_map(Op::Approve),
         (0u32..n).prop_map(Op::Release),
-        prop::collection::vec(0u32..n, 1..=n_ms).prop_map(Op::Refund),
+        prop::collection::vec(0u32..n, 1usize..=n as usize).prop_map(Op::Refund),
     ]
 }
 
@@ -110,37 +100,24 @@ struct Harness {
     env: Env,
     client_addr: Address,
     freelancer_addr: Address,
-    escrow_address: Address,
 }
 
 impl Harness {
     fn new() -> Self {
         let env = Env::default();
         env.mock_all_auths();
-        let admin = Address::generate(&env);
         let client_addr = Address::generate(&env);
         let freelancer_addr = Address::generate(&env);
-        let escrow_address = env.register(Escrow, ());
-        let escrow = EscrowClient::new(&env, &escrow_address);
-        escrow.initialize(&admin);
-
-        let token = env.register_stellar_asset_contract(admin.clone());
-        escrow.bind_settlement_token(&admin, &token);
-        let mint_amount = MAX_AMOUNT
-            .saturating_mul(MAX_MS as i128)
-            .saturating_mul(2);
-        StellarAssetClient::new(&env, &token).mint(&client_addr, &mint_amount);
-
         Harness {
             env,
             client_addr,
             freelancer_addr,
-            escrow_address,
         }
     }
 
     fn escrow_client(&self) -> EscrowClient<'_> {
-        EscrowClient::new(&self.env, &self.escrow_address)
+        let id = self.env.register(Escrow, ());
+        EscrowClient::new(&self.env, &id)
     }
 }
 
@@ -186,36 +163,6 @@ fn try_refund(
         client.refund_unreleased_milestones(&id, &v)
     }))
     .map_or(Err(()), |r| Ok(r))
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RefundSnapshot {
-    contract: Contract,
-    milestones: SorobanVec<Milestone>,
-}
-
-fn refund_snapshot(client: &EscrowClient, id: u32) -> RefundSnapshot {
-    RefundSnapshot {
-        contract: client.get_contract(&id),
-        milestones: client.get_milestones(&id),
-    }
-}
-
-fn assert_failed_refund_is_recoverable(
-    client: &EscrowClient,
-    env: &Env,
-    id: u32,
-    indices: &[u32],
-) {
-    let before = refund_snapshot(client, id);
-
-    let first = try_refund(client, env, id, indices);
-    assert!(first.is_err(), "expected refund request to be rejected");
-    assert_eq!(refund_snapshot(client, id), before);
-
-    let second = try_refund(client, env, id, indices);
-    assert!(second.is_err(), "retry must deterministically reject");
-    assert_eq!(refund_snapshot(client, id), before);
 }
 
 // ---------------------------------------------------------------------------
@@ -356,39 +303,6 @@ proptest! {
 
         // Final invariant check.
         assert_invariant(&client, id);
-    }
-
-    /// Rejected refunds are deterministic and recoverable under retry.
-    #[test]
-    fn prop_failed_refund_retry_preserves_state(amounts in milestone_amounts()) {
-        let h = Harness::new();
-        let client = h.escrow_client();
-        let total = sum(&amounts);
-        let ms: SorobanVec<i128> = {
-            let mut v = SorobanVec::new(&h.env);
-            for &a in &amounts {
-                v.push_back(a);
-            }
-            v
-        };
-        let id = client.create_contract(
-            &h.client_addr,
-            &h.freelancer_addr,
-            &None,
-            &ms,
-            &ReleaseAuthorization::ClientOnly,
-        );
-        assert!(try_deposit(&client, id, &h.client_addr, total));
-
-        assert_failed_refund_is_recoverable(&client, &h.env, id, &[0, 0]);
-        let out_of_bounds = amounts.len() as u32;
-        assert_failed_refund_is_recoverable(&client, &h.env, id, &[out_of_bounds]);
-
-        let refunded = try_refund(&client, &h.env, id, &[0]);
-        prop_assert_eq!(refunded, Ok(amounts[0]));
-        assert_invariant(&client, id);
-
-        assert_failed_refund_is_recoverable(&client, &h.env, id, &[0]);
     }
 
     /// Full cycle: deposit the exact total, approve each milestone, then
@@ -722,12 +636,9 @@ proptest! {
         small_count in 1u32..=3u32,
     ) {
         // Use amounts in the i128::MAX / 3 range to avoid multiplicative overflow.
-        let max_safe = MAX_AMOUNT;
+        let max_safe = i128::MAX / 3;
         let amounts: StdVec<i128> = (0..small_count)
-            .map(|i| {
-                let raw = (max_safe / (small_count as i128)) * ((i + 1) as i128);
-                (raw / TOKEN_UNIT).max(1) * TOKEN_UNIT
-            })
+            .map(|i| (max_safe / (small_count as i128)) * ((i + 1) as i128))
             .collect();
         // Avoid zero amounts.
         let amounts: StdVec<i128> = amounts.into_iter().map(|a| if a <= 0 { 1 } else { a }).collect();

@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::events::{emit_contract_indexed_event, validate_event_amounts};
+use crate::events::{emit_contract_indexed_event, validate_event_amounts, ContractIndexedEvent};
 use crate::EscrowError;
 use soroban_sdk::testutils::Events;
 use soroban_sdk::{symbol_short, Env, Symbol, TryFromVal};
@@ -140,6 +140,62 @@ fn emit_contract_indexed_event_emits_for_all_status_values() {
             status
         );
     }
+}
+
+// ── deterministic failure recovery ────────────────────────────────────
+
+#[test]
+fn emit_contract_indexed_event_is_deterministic_across_repeated_calls() {
+    let env = setup_env();
+    let contract = crate::Contract {
+        status: crate::ContractStatus::Funded,
+        funded_amount: 1000,
+        released_amount: 300,
+        refunded_amount: 100,
+        total_deposited: 1000,
+        ..Default::default()
+    };
+    emit_contract_indexed_event(&env, 7, &contract);
+    let first = env.events().all();
+    emit_contract_indexed_event(&env, 7, &contract);
+    let second = env.events().all();
+    assert_eq!(first.len(), second.len());
+    assert_eq!(first, second, "repeated emissions must be byte-identical");
+}
+
+#[test]
+fn emit_contract_indexed_event_recovers_after_invalid_id() {
+    let env = setup_env();
+    let contract = default_contract();
+    let bad = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        emit_contract_indexed_event(&env, 0, &contract);
+    }));
+    assert!(bad.is_err(), "invalid id must be rejected");
+    let good = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        emit_contract_indexed_event(&env, 1, &contract);
+    }));
+    assert!(good.is_ok(), "valid emission must succeed after failure");
+    let events = env.events().all();
+    assert_eq!(events.len(), 1, "only the successful emission is persisted");
+}
+
+#[test]
+fn contract_indexed_event_payload_is_stable() {
+    let contract = crate::Contract {
+        status: crate::ContractStatus::Completed,
+        funded_amount: 500,
+        released_amount: 500,
+        refunded_amount: 0,
+        total_deposited: 500,
+        ..Default::default()
+    };
+    let payload = ContractIndexedEvent::from_contract(99, &contract);
+    assert_eq!(payload.contract_id, 99);
+    assert_eq!(payload.status, crate::ContractStatus::Completed as u32);
+    assert_eq!(payload.funded_amount, 500);
+    assert_eq!(payload.released_amount, 500);
+    assert_eq!(payload.refunded_amount, 0);
+    assert_eq!(payload.total_deposited, 500);
 }
 
 #[test]

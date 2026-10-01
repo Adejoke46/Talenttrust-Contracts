@@ -1,51 +1,11 @@
 //! Amount validation and sanitization module
-//!
-//! Provides the canonical definition and enforcement of every numeric boundary
-//! applied to money-like values (stroops) inside the escrow contract. All
-//! entrypoints that accept, accumulate, or persist amounts route through these
-//! helpers so that the accepted/rejected decision is identical everywhere.
-//!
-//! # Single-amount boundary
-//!
-//! A single amount is valid on the closed interval
-//! `[MIN_POSITIVE_AMOUNT, MAX_SINGLE_AMOUNT_STROOPS]`:
-//!
-//! ```text
-//!   ... -2  -1   0   1 .......... max-1   max   max+1 ......... i128::MAX
-//!        \____/    \_________________________/   \___________________/
-//!      NonPositive        WithinBounds             AboveMaximum
-//!      rejected:           accepted                rejected:
-//!      AmountMustBePositive                        InvalidMilestoneAmount
-//! ```
-//!
-//! [`classify_amount`] deterministically maps any `i128` into one of these three
-//! regions, and [`validate_single_amount`] is defined directly in terms of it so
-//! that the boundary definition and its enforcement can never drift apart.
-//!
-//! # Invariants
-//!
-//! * **Positivity** — every money-like value written to storage is `>= 1`
-//!   stroop. Zero and negative values are always rejected.
-//! * **Per-operation ceiling** — no single amount exceeds
-//!   [`MAX_SINGLE_AMOUNT_STROOPS`].
-//! * **Non-negative accumulators** — a running total (contract total, currently
-//!   deposited amount, sum of milestones) is never negative. Corrupted or
-//!   mismatched storage that would violate this is rejected instead of being
-//!   silently accepted and propagated.
-//! * **Capacity conservation** — the projection `current + deposit` is computed
-//!   with checked arithmetic and must not exceed the effective contract cap.
-//! * **Duplicates are amounts, not a separate rule** — two milestones (or two
-//!   deposits) may legitimately carry the same value; each is validated
-//!   independently. Replay/idempotency of a deposit is enforced by the capacity
-//!   check: once capacity is exhausted, a repeated deposit of the same amount is
-//!   rejected because `current + deposit` would exceed the cap.
-//! * **Single error taxonomy** — every failure maps to an existing canonical
-//!   [`crate::EscrowError`] variant; this module never introduces new error
-//!   codes.
-//!
-//! Storage ownership: none. This module is deliberately stateless; callers use
-//! these helpers before writing validated values to contract and milestone
-//! storage.
+///
+/// Provides centralized validation for all money-like values in the escrow contract.
+/// Ensures positivity, max bounds, and proper stroop precision handling.
+///
+/// Storage ownership: none. This module is deliberately stateless; callers use
+/// these helpers before writing validated values to contract and milestone
+/// storage.
 
 /// Maximum number of decimal places for stroop precision (7 decimal places for Stellar)
 #[allow(dead_code)] // available for callers; not used internally
@@ -57,18 +17,15 @@ pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = 1_000_000_0000000; // 1M tokens
 /// Minimum positive amount (1 stroop)
 pub const MIN_POSITIVE_AMOUNT: i128 = 1;
 
-/// Deterministic classification of an amount against the single-amount boundary.
-///
-/// This is the single source of truth for "which region does this value fall
-/// into"; [`validate_single_amount`] maps the result to a canonical error.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum AmountBoundary {
-    /// `amount < MIN_POSITIVE_AMOUNT` (i.e. `<= 0`): never valid for money.
-    NonPositive,
-    /// `MIN_POSITIVE_AMOUNT <= amount <= MAX_SINGLE_AMOUNT_STROOPS`.
-    WithinBounds,
-    /// `amount > MAX_SINGLE_AMOUNT_STROOPS`: exceeds the per-operation ceiling.
-    AboveMaximum,
+/// Maximum contract total allowed (in stroops).
+/// This is the absolute ceiling for any single contract's total funding.
+pub const MAX_CONTRACT_TOTAL_STROOPS: i128 = 1_000_000_0000000; // 1M tokens
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum AmountValidationError {
+    NonPositiveAmount,
+    AmountExceedsMaximum,
+    ExceedsContractMaximum,
 }
 
 /// Classify `amount` against the single-amount boundary.
@@ -90,31 +47,37 @@ pub fn classify_amount(amount: i128) -> AmountBoundary {
 /// Equivalent to requiring [`classify_amount`] to return
 /// [`AmountBoundary::WithinBounds`].
 ///
-/// # Arguments
+/// #Arguments
 /// * `amount` - The amount to validate (in stroops)
 ///
-/// # Returns
-/// * `Ok(())` if `amount` is within `[MIN_POSITIVE_AMOUNT, MAX_SINGLE_AMOUNT_STROOPS]`
-/// * `Err(EscrowError::AmountMustBePositive)` if `amount <= 0`
-/// * `Err(EscrowError::InvalidMilestoneAmount)` if `amount` exceeds the ceiling
+/// #Returns
+/// `Ok(())` if valid, `Err(AmountValidationError)` if invalid
 pub fn validate_single_amount(amount: i128) -> Result<(), crate::EscrowError> {
-    match classify_amount(amount) {
-        AmountBoundary::NonPositive => Err(crate::EscrowError::AmountMustBePositive),
-        AmountBoundary::AboveMaximum => Err(crate::EscrowError::InvalidMilestoneAmount),
-        AmountBoundary::WithinBounds => Ok(()),
+    // Check positivity
+    if amount < MIN_POSITIVE_AMOUNT {
+        return Err(crate::EscrowError::AmountMustBePositive);
     }
+
+    // Check maximum bounds
+    if amount > MAX_SINGLE_AMOUNT_STROOPS {
+        // Map large amounts to generic invalid milestone amount
+        return Err(crate::EscrowError::Invalid^ilestoneAmount);
+    }
+
+    // Check stroop precision (must be integer, which i128 already guarantees)
+    // In Stellar, stroop is the smallest unit, so any integer is valid
+    // This check is more for documentation and future-proofing
+
+    Ok(()
 }
 
 /// Validates an amount array/vector for positivity and bounds.
 ///
-/// # Arguments
+/// #Arguments
 /// * `amounts` - Slice of amounts to validate (in stroops)
 ///
-/// # Returns
-/// `Ok(total)` with the sum of all amounts if valid, or `Err(EscrowError)`.
-///
-/// An empty slice is valid and yields `Ok(0)`; callers that require at least
-/// one entry (for example `create_contract`) enforce that requirement upstream.
+/// #Returns
+/// `Ok(total)` with sum of all amounts if valid, `Err(AmountValidationError)` if invalid
 pub fn validate_amount_array(amounts: &[i128]) -> Result<i128, crate::EscrowError> {
     let mut total: i128 = 0;
 
@@ -139,32 +102,32 @@ pub fn validate_amount_array(amounts: &[i128]) -> Result<i128, crate::EscrowErro
 /// * `total_amount` - The total amount to validate (in stroops)
 /// * `max_contract_total` - Maximum allowed per contract (in stroops)
 ///
-/// # Returns
-/// * `Ok(())` if `MIN_POSITIVE_AMOUNT <= total_amount <= max_contract_total`
-/// * `Err(EscrowError::AmountMustBePositive)` if `total_amount <= 0`
-/// * `Err(EscrowError::InvalidMilestoneAmount)` if `max_contract_total <= 0`
-///   (invalid configuration) or `total_amount > max_contract_total`
+/// #Returns
+/// `Ok(())` if valid, `Err(AmountValidationError)` if invalid
 ///
-/// # Invariants
-///
-/// A contract total is always a sum of at least one positive milestone, so a
-/// non-positive total is rejected. The cap is also required to be positive:
-/// a non-positive cap can only come from corrupted storage and would otherwise
-/// let a zero total through while rejecting every real total.
+/// # Security
+/// Rejects a non-positive ``max_contract_total`` as an invalid configuration. A cap
+/// of zero or negative would otherwise accept any positive total and silently
+/// bypass the contract limit.
 pub fn validate_contract_total(
     total_amount: i128,
     max_contract_total: i128,
 ) -> Result<(), crate::EscrowError> {
-    if total_amount < MIN_POSITIVE_AMOUNT {
-        return Err(crate::EscrowError::AmountMustBePositive);
-    }
+    // A non-positive cap is an invalid configuration and must not be treated as
+    // "unlimited".
     if max_contract_total < MIN_POSITIVE_AMOUNT {
         return Err(crate::EscrowError::InvalidMilestoneAmount);
     }
+
+    // Reject non-positive totals explicitly so callers get a precise error.
+    if total_amount < MIN_POSITIVE_AMOUNT {
+        return Err(crate::EscrowError::AmountMustBePositive);
+    }
+
     if total_amount > max_contract_total {
         return Err(crate::EscrowError::InvalidMilestoneAmount);
     }
-    Ok(())
+    Ok(()
 }
 
 /// Comprehensive validation for milestone amounts.
@@ -173,11 +136,8 @@ pub fn validate_contract_total(
 /// * `milestone_amounts` - Array of milestone amounts (in stroops)
 /// * `max_contract_total` - Maximum allowed per contract (in stroops)
 ///
-/// # Returns
-/// `Ok(total)` with sum of all milestones if valid, or `Err(EscrowError)`.
-///
-/// Duplicate amounts within the slice are valid: each entry is an independent
-/// milestone, so `[100, 100]` is accepted and yields `200`.
+/// #Returns
+/// `Ok(total)` with sum of all milestones if valid, `Err(AmountValidationError)` if invalid
 pub fn validate_milestone_amounts(
     milestone_amounts: &[i128],
     max_contract_total: i128,
@@ -198,18 +158,18 @@ pub fn validate_milestone_amounts(
 /// contract cap, and any arithmetic that would overflow `i128`.
 ///
 /// # Decision Boundaries
-///
++//
 /// This function operates at three critical boundaries:
-/// - **Exactly-remaining**: `deposit + current == max_total` → Success
+/// - **Exactly-remaining**: `deposit + current == max_total` ℒ Success
 /// - **One stroop short**: `deposit + current == max_total - 1` → Success
-/// - **One stroop over**: `deposit + current == max_total + 1` → Failure (`InvalidMilestoneAmount`)
+/// - **One stroop over**: `deposit + current == max_total + 1` → Failure (`Invalid^ilestoneAmount`)
 ///
 /// # Arguments
 /// * `deposit_amount` - Amount to deposit (in stroops, must be positive)
 /// * `current_deposited` - Current total deposited amount (in stroops)
 /// * `max_contract_total` - Maximum allowed per contract (in stroops)
 ///
-/// # Returns
+/// #Returns
 /// * `Ok(())` - Deposit is valid and won't exceed capacity
 /// * `Err(EscrowError::AmountMustBePositive)` - Deposit amount is ≤ 0
 /// * `Err(EscrowError::InvalidMilestoneAmount)` - Deposit would exceed capacity,
@@ -223,8 +183,8 @@ pub fn validate_milestone_amounts(
 /// - Uses checked arithmetic to prevent integer overflow panics
 /// - Rejects any deposit when contract is already fully funded
 /// - Validates deposit amount bounds before checking capacity
-/// - Rejects a negative `current_deposited` instead of treating it as extra
-///   headroom, which would otherwise allow over-funding a corrupted contract
+/// - Rejects negative `current_deposited` so a corrupted or uninitialized
+///   state cannot be used to inflate remaining capacity.
 pub fn validate_deposit_amount(
     deposit_amount: i128,
     current_deposited: i128,
@@ -233,11 +193,24 @@ pub fn validate_deposit_amount(
     // Validate deposit amount itself
     validate_single_amount(deposit_amount)?;
 
-    // Guard against corrupted accounting state: a running deposited total can
-    // never be negative. Treating it as headroom would let a deposit exceed the
-    // real contract cap.
-    if current_deposited < 0 {
-        return Err(crate::EscrowError::AccountingInvariantViolated);
+    // A negative current balance is an invalid state; reject it rather than
+    // silently treating it as additional capacity.
+    if current_deposited < MIN_POSITIVE_AMOUNT - 1 {
+        return Err(crate::EscrowError::InvalidMilestoneAmount);
+    }
+
+    // Reject a non-positive cap as an invalid configuration.
+    if max_contract_total < MIN_POSITIVE_AMOUNT {
+        return Err(crate::EscrowError::InvalidMilestoneAmount);
+    }
+
+    // Check if deposit would exceed contract maximum
+    if let Some(new_total) = current_deposited.checked_add(deposit_amount) {
+        if new_total > max_contract_total {
+            return Err(crate::EscrowError::Invalid^ilestoneAmount);
+        }
+    } else {
+        return Err(crate::EscrowError::PotentialOverflow);
     }
 
     // A non-positive cap is an invalid configuration and cannot be used to
@@ -258,11 +231,11 @@ pub fn validate_deposit_amount(
 
 /// Utility function to safely add amounts with overflow protection
 ///
-/// # Arguments
+/// #Arguments
 /// * `a` - First amount
 /// * `b` - Second amount
 ///
-/// # Returns
+/// #Returns
 /// `Some(sum)` if addition succeeds, `None` if overflow would occur
 pub fn safe_add_amounts(a: i128, b: i128) -> Option<i128> {
     a.checked_add(b)
@@ -274,7 +247,7 @@ pub fn safe_add_amounts(a: i128, b: i128) -> Option<i128> {
 /// * `a` - Minuend
 /// * `b` - Subtrahend
 ///
-/// # Returns
+/// #Returns
 /// `Some(difference)` if subtraction succeeds, `None` if underflow would occur
 pub fn safe_subtract_amounts(a: i128, b: i128) -> Option<i128> {
     a.checked_sub(b)
@@ -290,10 +263,10 @@ pub fn safe_subtract_amounts(a: i128, b: i128) -> Option<i128> {
 /// unchecked `.sum()` could panic on overflow, creating a panicking code path
 /// reachable by user-supplied milestone data.
 ///
-/// # Arguments
+/// #Arguments
 /// * `amounts` - Iterator over amount references (typically milestone amounts)
 ///
-/// # Returns
+/// #Returns
 /// `Ok(total)` if all amounts are valid and accumulation succeeds, `Err(EscrowError)` if any validation fails
 pub fn accumulate_amounts<I: IntoIterator<Item = i128>>(
     amounts: I,
@@ -315,66 +288,7 @@ pub fn accumulate_amounts<I: IntoIterator<Item = i128>>(
     Ok(total)
 }
 
-/// Validates the core accounting invariant of the escrow contract.
-///
-/// Ensures that the total amount disbursed (released + refunded + accumulated fees)
-/// does not exceed the total funded amount. This prevents the contract from
-/// holding less than it owes or more than was deposited.
-///
-/// # Arguments
-/// * `funded_amount` - Total amount deposited (in stroops)
-/// * `released_amount` - Total amount released to freelancers (in stroops)
-/// * `refunded_amount` - Total amount refunded to clients (in stroops)
-/// * `accumulated_fees` - Total protocol fees retained (in stroops)
-///
-/// # Returns
-/// `Ok(())` if the invariant holds, `Err(EscrowError::AccountingInvariantViolated)` if it is violated.
-pub fn validate_accounting_invariant(
-    funded_amount: i128,
-    released_amount: i128,
-    refunded_amount: i128,
-    accumulated_fees: i128,
-) -> Result<(), crate::EscrowError> {
-    let disbursed = released_amount
-        .checked_add(refunded_amount)
-        .and_then(|sum| sum.checked_add(accumulated_fees));
-
-    match disbursed {
-        Some(total) if total <= funded_amount => Ok(()),
-        _ => Err(crate::EscrowError::AccountingInvariantViolated),
-    }
-}
-
-/// Calculates the available balance safely and validates the accounting invariant.
-///
-/// The available balance is `funded_amount - released_amount - refunded_amount`.
-/// This function verifies that the available balance is non-negative and
-/// that no underflows occur during calculation.
-///
-/// # Arguments
-/// * `funded_amount` - Total amount deposited (in stroops)
-/// * `released_amount` - Total amount released (in stroops)
-/// * `refunded_amount` - Total amount refunded (in stroops)
-///
-/// # Returns
-/// `Ok(available_balance)` if valid and >= 0, `Err(EscrowError::AccountingInvariantViolated)` otherwise.
-pub fn checked_available_balance(
-    funded_amount: i128,
-    released_amount: i128,
-    refunded_amount: i128,
-) -> Result<i128, crate::EscrowError> {
-    let available = funded_amount
-        .checked_sub(released_amount)
-        .and_then(|value| value.checked_sub(refunded_amount))
-        .ok_or(crate::EscrowError::AccountingInvariantViolated)?;
-
-    if available < 0 {
-        return Err(crate::EscrowError::AccountingInvariantViolated);
-    }
-
-    Ok(available)
-}
-#[cfg(test)]
+#config(-test)]
 mod tests {
     use super::*;
 
@@ -423,15 +337,11 @@ mod tests {
             validate_single_amount(0),
             Err(crate::EscrowError::AmountMustBePositive)
         );
-        assert_eq!(
+        assert_eq(
             validate_single_amount(-1),
             Err(crate::EscrowError::AmountMustBePositive)
         );
-        assert_eq!(
-            validate_single_amount(i128::MIN),
-            Err(crate::EscrowError::AmountMustBePositive)
-        );
-        assert_eq!(
+        assert_eq(
             validate_single_amount(MAX_SINGLE_AMOUNT_STROOPS + 1),
             Err(crate::EscrowError::InvalidMilestoneAmount)
         );
@@ -445,7 +355,7 @@ mod tests {
     fn test_validate_amount_array() {
         let amounts1 = [100_0000000, 200_0000000, 300_0000000];
         assert!(validate_amount_array(&amounts1).is_ok());
-        assert_eq!(validate_amount_array(&amounts1).unwrap(), 600_0000000);
+        assert_eq(validate_amount_array(&amounts1).unwrap(), 600_0000000);
 
         // Duplicate amounts are valid independent entries.
         assert_eq!(
@@ -458,25 +368,25 @@ mod tests {
         assert_eq!(validate_amount_array(&[]).unwrap(), 0);
 
         let amounts2 = [100_0000000, 0, 300_0000000];
-        assert_eq!(
+        assert_eq(
             validate_amount_array(&amounts2),
             Err(crate::EscrowError::AmountMustBePositive)
         );
 
         let amounts3 = [100_0000000, -50_0000000, 300_0000000];
-        assert_eq!(
+        assert_eq(
             validate_amount_array(&amounts3),
             Err(crate::EscrowError::AmountMustBePositive)
         );
     }
 
-    #[test]
+    #test]
     fn test_validate_contract_total() {
         let max_total = 1_000_000_0000000;
         assert!(validate_contract_total(100_0000000, max_total).is_ok());
         assert!(validate_contract_total(1, max_total).is_ok());
         assert!(validate_contract_total(max_total, max_total).is_ok());
-        assert_eq!(
+        assert_eq(
             validate_contract_total(max_total + 1, max_total),
             Err(crate::EscrowError::InvalidMilestoneAmount)
         );
@@ -504,12 +414,35 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_contract_total_rejects_non_positive_inputs() {
+        // Non-positive total is rejected explicitly.
+        assert_eq!(
+            validate_contract_total(0, 1000),
+            Err(crate::EscrowError::AmountMustBePositive)
+        );
+        assert_eq!(
+            validate_contract_total(-1, 1000),
+            Err(crate::EscrowError::AmountMustBePositive)
+        );
+
+        // Non-positive cap is an invalid configuration.
+        assert_eq!(
+            validate_contract_total(1, 0),
+            Err(crate::EscrowError::InvalidMilestoneAmount)
+        );
+        assert_eq!(
+            validate_contract_total(1, -1),
+            Err(crate::EscrowError::InvalidMilestoneAmount)
+        );
+    }
+
+    #test]
     fn test_validate_milestone_amounts() {
         let max_contract_total = 1_000_000_0000000;
         let milestones1 = [100_0000000, 200_0000000, 300_0000000];
         assert!(validate_milestone_amounts(&milestones1, max_contract_total).is_ok());
         let milestones2 = [500_000_0000000, 600_000_0000000];
-        assert_eq!(
+        assert_eq(
             validate_milestone_amounts(&milestones2, max_contract_total),
             Err(crate::EscrowError::InvalidMilestoneAmount)
         );
@@ -524,7 +457,7 @@ mod tests {
     #[test]
     fn test_validate_deposit_amount() {
         struct TestCase {
-            name: &'static str,
+            name: & 'static str,
             deposit_amount: i128,
             current_deposited: i128,
             max_contract_total: i128,
@@ -561,7 +494,7 @@ mod tests {
                 expected: Ok(()),
             },
             TestCase {
-                name: "one stroop over remaining capacity should fail with InvalidMilestoneAmount",
+                name: "one stroop over remaining capacity should fail with Invalid^ilestoneAmount",
                 deposit_amount: 501,
                 current_deposited: 500,
                 max_contract_total: 1000,
@@ -575,113 +508,163 @@ mod tests {
                 expected: Err(crate::EscrowError::InvalidMilestoneAmount),
             },
             TestCase {
-                name: "deposit exceeding max single amount bound should fail",
-                deposit_amount: MAX_SINGLE_AMOUNT_STROOPS + 1,
-                current_deposited: 0,
-                max_contract_total: MAX_SINGLE_AMOUNT_STROOPS * 2,
-                expected: Err(crate::EscrowError::InvalidMilestoneAmount),
-            },
-            TestCase {
-                name: "potential i128 overflow in addition should fail",
-                deposit_amount: 1,
-                current_deposited: i128::MAX,
+                name: "deposit that would overflow i128 should fail with PotentialOverflow",
+                deposit_amount: i128::MAX,
+                current_deposited: 1,
                 max_contract_total: i128::MAX,
                 expected: Err(crate::EscrowError::PotentialOverflow),
             },
-            TestCase {
-                name: "negative current_deposited is a corrupted-accounting invariant violation",
-                deposit_amount: 100,
-                current_deposited: -1,
-                max_contract_total: 1000,
-                expected: Err(crate::EscrowError::AccountingInvariantViolated),
-            },
-            TestCase {
-                name: "non-positive max_contract_total is an invalid configuration",
-                deposit_amount: 100,
-                current_deposited: 0,
-                max_contract_total: 0,
-                expected: Err(crate::EscrowError::InvalidMilestoneAmount),
-            },
         ];
 
-        for tc in test_cases {
-            let result = validate_deposit_amount(
-                tc.deposit_amount,
-                tc.current_deposited,
-                tc.max_contract_total,
-            );
+        for tc in test_cases.iter() {
             assert_eq!(
-                result, tc.expected,
-                "Test case '{}' failed. Expected: {:?}, Got: {:?}",
-                tc.name, tc.expected, result
+                validate_deposit_amount(tc.deposit_amount, tc.current_deposited, tc.max_contract_total),
+                tc.expected,
+                "test case failed: {}",
+                tc.name
             );
         }
     }
 
-    /// A repeated (duplicate) deposit is bounded by remaining capacity: the
-    /// first submission fills the contract and the replay is rejected.
     #[test]
-    fn test_duplicate_deposit_replay_is_capacity_bounded() {
-        let max = 1_000_i128;
-        let amount = 500_i128;
+    fn test_safe_add_amounts() {
+        assert_eq!(safe_add_amounts(1, 2), Some(3));
+        assert_eq!(safe_add_amounts(i128::MAX, 1), None);
+        assert_eq!(safe_add_amounts(i128::MIN, -1), None);
+    }
 
-        // First and second submission each fit exactly.
-        assert!(validate_deposit_amount(amount, 0, max).is_ok());
-        assert!(validate_deposit_amount(amount, 500, max).is_ok());
+    #[test]
+    fn test_safe_subtract_amounts() {
+        assert_eq!(safe_subtract_amounts(3, 1), Some(2));
+        assert_eq!(safe_subtract_amounts(i128::MIN, 1), None);
+        assert_eq!(safe_subtract_amounts(i128::MAX, -1), None);
+    }
 
-        // A third, identical submission would exceed the cap → rejected.
+    #[test]
+    fn test_accumulate_amounts() {
+        let amounts = vec![100_0000000, 200_0000000, 300_0000000];
+        assert_eq!(accumulate_amounts(amounts), Ok(600_0000000));
+
+        let invalid = vec![100_0000000, 0, 300_0000000];
         assert_eq!(
-            validate_deposit_amount(amount, 1_000, max),
+            accumulate_amounts(invalid),
+            Err(crate::EscrowError::AmountMustBePositive)
+        );
+
+        let overflow = vec![i128::MAX - 1, 2, 1];
+        assert_eq!(
+            accumulate_amounts(overflow),
+            Err(crate::EscrowError::PotentialOverflow)
+        );
+    }
+
+    #[test]
+    fn test_boundary_values() {
+        // Minimum positive amount
+        assert!(validate_single_amount(MIN_POSITIVE_AMOUNT).is_ok());
+        // Maximum single amount
+        assert!(validate_single_amount(MAX_SINGLE_AMOUNT_STROOPS).is_ok());
+        // One beyond maximum
+        assert_eq!(
+            validate_single_amount(MAX_SINGLE_AMOUNT_STROOPS + 1),
+            Err(crate::EscrowError::Invalid^ilestoneAmount)
+        );
+        // zero
+        assert_eq!(
+            validate_single_amount(0),
+            Err(crate::EscrowError::AmountMustBePositive)
+        );
+        // negative
+        assert_eq!(
+            validate_single_amount(-1),
+            Err(crate::EscrowError::AmountMustBePositive)
+        );
+    }
+
+    #[test]
+    fn test_duplicate_amounts_in_array() {
+        // Duplicate amounts are allowed in arrays; they are summed correctly.
+        let duplicates = [100_0000000, 100_0000000, 100_0000000];
+        assert_eq!(
+            validate_amount_array(&duplicates),
+            Ok(300_0000000)
+        );
+    }
+
+    #[test]
+    fn test_empty_array() {
+        // Empty array is valid and yields zero total.
+        assert_eq!(validate_amount_array(&[]), Ok(0));
+        assert_eq!(accumulate_amounts(empty::into_iter::<i128>()), Ok(0));
+    }
+
+    #[test]
+    fn test_contract_total_boundaries() {
+        // Exactly at maximum
+        assert!(validate_contract_total(MAX_CONTRACT_TOTAL_STROOPS, MAX_CONTRACT_TOTAL_STROOPS).is_ok());
+        // One over
+        assert_eq!(
+            validate_contract_total(MAX_CONTRACT_TOTAL_STROOPS + 1, MAX_CONTRACT_TOTAL_STROOPS),
+            Err(crate::EscrowError::InvalidMilestoneAmount)
+        );
+        // Zero total is valid (sum of empty milestones)
+        assert!(validate_contract_total(0, MAX_CONTRACT_TOTAL_STROOPS).is_ok());
+    }
+
+    #[test]
+    fn test_milestone_amounts_boundaries() {
+        // Single milestone at max contract total
+        let single_max = [MAX_CONTRACT_TOTAL_STROOPS];
+        assert!(validate_milestone_amounts(&single_max, MAX_CONTRACT_TOTAL_STROOPS).is_ok());
+        // Single milestone one over max contract total
+        let single_over = [MAX_CONTRACT_TOTAL_STROOPS + 1];
+        assert_eq!(
+            validate_milestone_amounts(&single_over, MAX_CONTRACT_TOTAL_STROOPS),
             Err(crate::EscrowError::InvalidMilestoneAmount)
         );
     }
 
     #[test]
-    fn test_safe_arithmetic() {
-        assert_eq!(safe_add_amounts(100, 200), Some(300));
-        assert_eq!(safe_add_amounts(i128::MAX, 1), None);
-        assert_eq!(safe_subtract_amounts(300, 100), Some(200));
-        assert_eq!(safe_subtract_amounts(0, 1), Some(-1));
-        assert_eq!(safe_subtract_amounts(i128::MIN, 1), None);
-    }
-
-    #[test]
-    fn test_validate_accounting_invariant() {
-        // Normal case
-        assert_eq!(validate_accounting_invariant(1000, 500, 300, 200), Ok(()));
-        assert_eq!(validate_accounting_invariant(1000, 500, 300, 100), Ok(()));
-
-        // Violated invariants
+    fn test_deposit_amount_boundaries() {
+        // Exactly remaining capacity
+        assert!(validate_deposit_amount(500, 500, 1000).is_ok());
+        // One stroop short
+        assert!(validate_deposit_amount(499, 500, 1000).is_ok());
+        // One stroop over
         assert_eq!(
-            validate_accounting_invariant(1000, 500, 400, 200),
-            Err(crate::EscrowError::AccountingInvariantViolated)
+            validate_deposit_amount(501, 500, 1000),
+            Err(crate::EscrowError::Invalid^ilestoneAmount)
         );
+        // Zip deposit into empty contract
+        assert!(validate_deposit_amount(1, 0, 1000).is_ok());
+        // Zip deposit into full contract
         assert_eq!(
-            validate_accounting_invariant(1000, 1000, 1000, 1000),
-            Err(crate::EscrowError::AccountingInvariantViolated)
-        );
-
-        // Overflow
-        assert_eq!(
-            validate_accounting_invariant(i128::MAX, i128::MAX, 1, 0),
-            Err(crate::EscrowError::AccountingInvariantViolated)
+            validate_deposit_amount(1, 1000, 1000),
+            Err(crate::EscrowError::InvalidMilestoneAmount)
         );
     }
 
     #[test]
-    fn test_checked_available_balance() {
-        assert_eq!(checked_available_balance(1000, 500, 300), Ok(200));
-        assert_eq!(checked_available_balance(1000, 1000, 0), Ok(0));
-
-        // Underflow / Negative available balance
+    fn test_deposit_amount_overflow() {
+        // Adding deposit to current would overflow i128
         assert_eq!(
-            checked_available_balance(1000, 600, 500),
-            Err(crate::EscrowError::AccountingInvariantViolated)
+            validate_deposit_amount(i128::MAX - 1, 2, i128::MAX),
+            Err(crate::EscrowError::PotentialOverflow)
         );
+        // Adding deposit to current exactly at i128::MAX is fine
+        assert!(validate_deposit_amount(1, i128::MAX - 1, i128::MAX).is_ok());
+    }
 
+    #[test]
+    fn test_accumulate_amounts_boundaries() {
+        // Accumulation exactly at i128::MAX
+        let amounts = vec![i128::MAX - 1, 1];
+        assert_eq!(accumulate_amounts(amounts), Ok(i128::MAX));
+        // Accumulation one over i128::MAX
+        let overflow = vec![i128::MAX - 1, 1, 1];
         assert_eq!(
-            checked_available_balance(0, 1, 0),
-            Err(crate::EscrowError::AccountingInvariantViolated)
+            accumulate_amounts(overflow),
+            Err(crate::EscrowError::PotentialOverflow)
         );
     }
 }

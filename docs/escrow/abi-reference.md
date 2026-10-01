@@ -72,9 +72,9 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Signature: `finalize_contract(env: Env, contract_id: u32, finalizer: Address) -> bool`
 - Kind: Mutating
 - Auth: `finalizer.require_auth()`
-- Semantics: Writes an immutable finalization record for a contract already in `Completed` or `Disputed` state. Prevents later contract-specific mutations.
-- Events: `("finalized", contract_id)`
-- Errors: `ContractPaused`, `EmergencyActive`, `ContractNotFound`, `AlreadyFinalized`, `UnauthorizedRole`, `InvalidStatusTransition`
+- Semantics: Writes an immutable finalization record for a contract already in `Completed` or `Disputed` state. The close summary is fully validated before anything is written, so a rejected call leaves the contract unfinalized, mutable and retryable. Prevents later contract-specific mutations.
+- Events: `("finalized", contract_id)` with payload `(finalizer, timestamp, summary)`
+- Errors: `ContractPaused`, `EmergencyActive`, `ContractNotFound`, `AlreadyFinalized`, `UnauthorizedRole`, `InvalidStatusTransition`, `FinalizationStateIncomplete`, `AccountingInvariantViolated`, `PotentialOverflow`
 
 ### get_finalization_record
 
@@ -345,8 +345,8 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Kind: Mutating
 - Auth: `caller.require_auth()`
 - Semantics: Issues reputation for a completed contract once. Updates the freelancer's aggregate reputation record and stores the provided comment.
-- Events: None in the current implementation
-- Errors: `ContractNotFound`, `UnauthorizedRole`, `InvalidRating`, `EmptyComment`, `CommentTooLong`, `NotCompleted`, `ReputationAlreadyIssued`, `SelfRating`, `InvalidState`
+- Events: `rep_issd`; topics `(rep_issd, contract_id)`, data `(freelancer, rating, timestamp)`. Emitted once after successful issuance; rejected calls emit no issuance event.
+- Errors: `ContractNotFound`, `UnauthorizedRole`, `InvalidRating`, `EmptyComment`, `CommentTooLong`, `NotCompleted`, `ReputationAlreadyIssued`, `SelfRating`, `InvalidState`, `PotentialOverflow`
 
 ### get_reputation_comment
 
@@ -464,6 +464,35 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Semantics: Aborts a pending admin transfer proposal (expired or not).
 - Events: `("admin", "cancelled")`
 - Errors: `NotInitialized`, `InvalidState`, `UnauthorizedRole`
+
+### get_admin_rotation_revision
+
+- Signature: `get_admin_rotation_revision(env: Env) -> u64`
+- Kind: Read-only
+- Auth: None
+- Semantics: Returns the monotonic admin-rotation revision, defaulting to zero on upgrade.
+- Events: None
+- Errors: None
+
+### Checked admin rotation
+
+| Entrypoint | Signature (excluding `env: Env`) | Auth |
+| --- | --- | --- |
+| `propose_admin_checked` | `(proposed: Address, expected_revision: u64) -> bool` | Stored admin |
+| `accept_admin_checked` | `(expected_revision: u64) -> bool` | Proposed admin |
+| `cancel_admin_checked` | `(expected_revision: u64) -> bool` | Stored admin |
+| `recover_admin_proposal_checked` | `(expected_revision: u64) -> bool` | Stored admin |
+
+These mutating methods apply the same validation and timing rules as their legacy
+counterparts, but first reject a mismatched revision with `StaleNonce`. Recovery
+requires a pending proposal strictly older than `ADMIN_ROTATION_PROPOSAL_TTL_LEDGERS`.
+Every successful rotation, checked or legacy, increments the revision and emits
+`("admin_rotation_revision",)` with the new `u64`, followed by the existing admin
+event. At `u64::MAX`, rotation fails with `PotentialOverflow` without changing state.
+Other errors are the corresponding legacy errors. See
+[governance security](governance-security.md#concurrent-clients-and-retries) for
+snapshot reads and retry/migration guidance. Legacy methods retain latest-state
+behavior and require client migration for stale-intent protection.
 
 ### get_pending_admin
 

@@ -1,4 +1,4 @@
-//! Dispute payout arithmetic and final-status helpers.
+//! Dispute payout arithmetic, final-status helpers, and deterministic recovery.
 //!
 //! This module is intentionally storage-free. It computes how the currently
 //! available escrow balance should be split for a `DisputeResolution` and tells
@@ -18,6 +18,34 @@ use soroban_sdk::Env;
 pub const PARTIAL_REFUND_FREELANCER_PERCENT: i128 = 30;
 /// Percent base used with [`PARTIAL_REFUND_FREELANCER_PERCENT`].
 pub const PARTIAL_REFUND_PERCENT_BASE: i128 = 100;
+
+// ---------------------------------------------------------------------------
+// Validation boundaries
+// ---------------------------------------------------------------------------
+
+/// Maximum number of bytes accepted in a dispute reason hash.
+///
+/// Boundary: `0 <= reason_hash.len() <= MAX_DISPUTE_REASON_HASH_LEN`.
+/// A zero-length hash is valid (callers may omit the reason); anything longer
+/// is rejected as [`Error::InvalidDisputeReason`] to keep storage bounded.
+pub const MAX_DISPUTE_REASON_HASH_LEN: u32 = 64;
+
+/// Basis-point denominator used for dispute split configuration.
+///
+/// Boundary: `partial_refund_freelancer_bps + partial_refund_client_bps == 10_000`.
+pub const DISPUTE_BPS_DENOMINATOR: u32 = 10_000;
+
+/// Validate a dispute reason hash length against [`MAX_DISPUTE_REASON_HASH_LEN`].
+///
+/// Returns `Ok(())` for lengths in `[0, MAX_DISPUTE_REASON_HASH_LEN]` and
+/// [`Error::InvalidDisputeReason`] otherwise. This is a pure boundary check so
+/// it can be reused by entrypoints before any storage mutation occurs.
+pub fn validate_dispute_reason_hash_len(len: u32) -> Result<(), Error> {
+    if len > MAX_DISPUTE_REASON_HASH_LEN {
+        return Err(Error::InvalidDisputeReason);
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // DisputeConfig default basis-point constants
@@ -61,6 +89,25 @@ pub fn set_dispute_config(env: &Env, config: DisputeConfig) {
         .set(&DataKey::DisputeConfigKey, &config);
 }
 
+/// Validate a [`DisputeConfig`] split before persisting it.
+///
+/// Boundaries enforced:
+/// - `partial_refund_freelancer_bps + partial_refund_client_bps == DISPUTE_BPS_DENOMINATOR`
+/// - each leg is `<= DISPUTE_BPS_DENOMINATOR`
+///
+/// Returns [`Error::InvalidDisputeSplit`] on any violation so that
+/// `set_arbiter_config` cannot persist a non-conserving split.
+pub fn validate_dispute_config(config: &DisputeConfig) -> Result<(), Error> {
+    let total = config
+        .partial_refund_freelancer_bps
+        .checked_add(config.partial_refund_client_bps)
+        .ok_or(Error::InvalidDisputeSplit)?;
+    if total != DISPUTE_BPS_DENOMINATOR {
+        return Err(Error::InvalidDisputeSplit);
+    }
+    Ok(())
+}
+
 /// Compute the payout split for a dispute resolution.
 ///
 /// Returns a [`DisputeInfo`] with named fields so callers can reference
@@ -77,20 +124,22 @@ pub fn set_dispute_config(env: &Env, config: DisputeConfig) {
 /// - [`Error::AccountingInvariantViolated`] if available would be negative (corrupted state)
 /// - [`Error::PotentialOverflow`] if intermediate calculations overflow
 /// - [`Error::InvalidDisputeSplit`] for Split variant with negative legs or non-conserving sum
-///
-/// # Compatibility
-/// The returned [`DisputeInfo`] shape and the error variants above are part of
-/// the public contract for this module. Callers must not depend on positional
-/// tuple indexing; use the named fields.
+/// - [`Error::InvalidDisputeSplit`] if `available == 0` (nothing left to distribute)
 pub fn resolution_payouts(
     contract: &Contract,
     resolution: &DisputeResolution,
 ) -> Result<DisputeInfo, Error> {
-    let available = crate::amount_validation::checked_available_balance(
-        contract.funded_amount,
-        contract.released_amount,
-        contract.refunded_amount,
-    )?;
+    let available = contract
+        .funded_amount
+        .checked_sub(contract.released_amount)
+        .and_then(|value| value.checked_sub(contract.refunded_amount))
+        .ok_or(Error::AccountingInvariantViolated)?;
+    if available < 0 {
+        return Err(Error::AccountingInvariantViolated);
+    }
+    if available == 0 {
+        return Err(Error::InvalidDisputeSplit);
+    }
 
     match resolution {
         DisputeResolution::FullRefund => Ok(DisputeInfo {
@@ -146,9 +195,9 @@ pub fn resolution_payouts(
 /// Returns `Refunded` only when the full deposit has been refunded.
 /// Otherwise returns `Completed`.
 ///
-/// # Invariant
-/// This function is pure and deterministic: it depends only on the
-/// `funded_amount` and `refunded_amount` fields of `contract`.
+/// Boundary: `refunded_amount == funded_amount` yields `Refunded`; any other
+/// combination (including `refunded_amount > funded_amount`, which is a
+/// corrupted state) yields `Completed` so callers can detect the anomaly.
 pub fn final_status_after_resolution(contract: &Contract) -> ContractStatus {
     if contract.refunded_amount == contract.funded_amount {
         ContractStatus::Refunded
@@ -200,11 +249,10 @@ pub fn get_dispute_storage_version(env: &Env, contract_id: u32) -> u32 {
 ///
 /// Panics with `DisputeNotFound` when no record exists.
 ///
-/// # Compatibility
-/// Records written with a schema version greater than
-/// [`DISPUTE_STORAGE_VERSION`] cause a panic with [`Error::InvalidState`]
-/// rather than being silently coerced, preserving forward-compatibility
-/// guarantees. v0 records are migrated in place and re-persisted as v1.
+/// Boundary: a stored `schema_version` strictly greater than
+/// [`DISPUTE_STORAGE_VERSION`] is rejected with [`Error::InvalidState`] rather
+/// than silently downgraded, so forward-incompatible records cannot be
+/// misinterpreted.
 pub fn load_dispute_metadata(env: &Env, contract_id: u32) -> DisputeMetadata {
     if let Some(meta) = env
         .storage()
@@ -232,8 +280,10 @@ pub fn load_dispute_metadata(env: &Env, contract_id: u32) -> DisputeMetadata {
 
 /// Migrate a v0 metadata record to the current schema version.
 ///
-/// This function is pure and does not touch storage; callers are responsible
-/// for persisting the returned value via [`store_dispute_metadata`].
+/// Boundary: `v0.raised_at` and `v0.reason_hash` are preserved verbatim; only
+/// `schema_version` is rewritten to [`DISPUTE_STORAGE_VERSION`]. Callers must
+/// validate `reason_hash` length via [`validate_dispute_reason_hash_len`]
+/// before invoking this migration.
 pub fn migrate_dispute_metadata_v0_to_v1(v0: DisputeMetadataV0) -> DisputeMetadata {
     DisputeMetadata {
         schema_version: DISPUTE_STORAGE_VERSION,

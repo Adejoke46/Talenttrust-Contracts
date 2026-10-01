@@ -1,14 +1,14 @@
-#`![cfg(test)]
+#`!cfg(test)]
 
 //! Overflow and saturation coverage for the events-arithmetic guard rails.
 ///
-/// `available_balance`, `safe_add_amounts`, and `safe_subtract_amounts`
-/// (see `amount_validation.rs`) back every value published on `refunded`,
-/// `released`, and `resolved` events. These unit tests exercise them
-/// directly at i128 extremes: production entrypoints cannot reach these
-/// extremes themselves because `MAX_SINGLE_AMOUNT_STROOPS` /
-/// `MAX_TOTAL_ESCROW_STROOPS` already reject any single amount or milestone
-/// sum anywhere nea i128::MAX after it reaches this arithmetic.
+//! `available_balance`, `safe_add_amounts`, and `safe_subtract_amounts`
+//! (see `amount_validation.rs`) back every value published on `refunded`,
+//! `released`, and `resolved` events. These unit tests exercise them
+//! directly at i128 extremes: production entrypoints cannot reach these
+//! extremes themselves because `MAX_SINGLE_AMOUNT_STROOPS` /
+//! `MAX_TOTAL_ESCROW_STROOPS` already reject any single amount or milestone
+//! sum anywhere near i128::MAX and before it reaches this arithmetic.
 
 use crate::amount_validation::{available_balance, safe_add_amounts, safe_subtract_amounts};
 

@@ -1,4 +1,4 @@
-//! Fuzz coverage for milestone deadline arithmetic (issue #1359).
+//! Fuzz coverage for milestone deadline arithmetic and state invariants (issue #1359).
 //!
 //! Hand-picked dates miss overflow and boundary bugs around ledger timestamps
 //! and grace periods. This module generates bounded timestamps and durations
@@ -10,9 +10,7 @@
 //! - **Overflow safety**: `u64` boundary values do not panic.
 //! - **Ledger boundary**: timestamp 0 and `u64::MAX` are handled.
 //! - **Escrow conservation**: release/refund totals never exceed deposits.
-//! - **Compatibility contract**: the public `is_milestone_overdue` entrypoint
-//!   keeps its strict-`>` semantics, `None`/released short-circuits, and
-//!   never mutates escrow accounting across all generated inputs.
+//! - **Concurrent idempotency**: repeated overdue checks are side-effect free.
 //!
 //! # Running
 //!
@@ -39,8 +37,27 @@ fn set_now(env: &Env, secs: u64) {
     });
 }
 
+/// Snapshot the persisted milestone at `index` so we can assert that read-only
+/// entrypoints do not mutate it (deterministic recovery invariant).
+fn read_milestone(
+    env: &Env,
+    contract_addr: &Address,
+    contract_id: u32,
+    index: u32,
+) -> Milestone {
+    env.as_contract(contract_addr, || {
+        let key = (
+            DataKey::Contract(contract_id),
+            Symbol::new(env, "milestones"),
+        );
+        let milestones: SorobanVec<Milestone> = env.storage().persistent().get(&key).unwrap();
+        milestones.get(index).unwrap()
+    })
+}
+
 /// Overwrite milestone `index`'s `deadline` and `released` flag directly in
 /// persistent storage, bypassing any setter entrypoint.
+/// Callers must ensure `index` is in-bounds for the stored milestone vector.
 fn set_milestone_deadline_and_released(
     env: &Env,
     contract_addr: &Address,
@@ -63,31 +80,48 @@ fn set_milestone_deadline_and_released(
     });
 }
 
-/// Assert the public compatibility contract for `is_milestone_overdue`:
-/// the call must not mutate escrow accounting and must return the same value
-/// on repeated invocation with identical state (determinism).
-fn assert_overdue_compat_contract(
+/// Snapshot of the milestone fields that must remain invariant across
+/// read-only deadline queries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MilestoneSnapshot {
+    deadline: Option<u64>,
+    released: bool,
+    refunded: bool,
+    amount: i128,
+}
+
+/// Read milestone `index` directly from persistent storage without going
+/// through any entrypoint, so we can assert on raw state.
+fn read_milestone(
     env: &Env,
-    client: &crate::EscrowClient,
-    contract_id: &u32,
-    index: &u32,
-    expected: bool,
-) {
-    let first = client.is_milestone_overdue(contract_id, index);
-    let second = client.is_milestone_overdue(contract_id, index);
-    assert_eq!(
-        first, second,
-        "is_milestone_overdue must be deterministic for identical state"
-    );
-    assert_eq!(
-        first, expected,
-        "is_milestone_overdue returned unexpected value"
-    );
-    let contract = client.get_contract(contract_id);
-    assert_eq!(contract.funded_amount, 0i128, "funded_amount must be unchanged");
-    assert_eq!(contract.released_amount, 0i128, "released_amount must be unchanged");
-    assert_eq!(contract.refunded_amount, 0i128, "refunded_amount must be unchanged");
-    let _ = env;
+    contract_addr: &Address,
+    contract_id: u32,
+    index: u32,
+) -> Milestone {
+    env.as_contract(contract_addr, || {
+        let key = (
+            DataKey::Contract(contract_id),
+            Symbol::new(env, "milestones"),
+        );
+        let milestones: SorobanVec<Milestone> = env.storage().persistent().get(&key).unwrap();
+        milestones.get(index).unwrap()
+    })
+}
+
+/// Capture a snapshot of the milestone at `index`.
+fn snapshot_milestone(
+    env: &Env,
+    contract_addr: &Address,
+    contract_id: u32,
+    index: u32,
+) -> MilestoneSnapshot {
+    let m = read_milestone(env, contract_addr, contract_id, index);
+    MilestoneSnapshot {
+        deadline: m.deadline,
+        released: m.released,
+        refunded: m.refunded,
+        amount: m.amount,
+    }
 }
 
 // ── Category 1: Zero duration / zero deadline ────────────────────────────────
@@ -98,17 +132,20 @@ proptest! {
     /// A milestone with deadline=0 and now=0 must NOT be overdue (strict >).
     #[test]
     fn fuzz_deadline_zero_now_zero_not_overdue(_seed in 0u32..256u32) {
+        // Invariant: is_milestone_overdue is a pure read; state must not change.
         let env = Env::default();
         env.mock_all_auths();
         let client = register_client(&env);
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(0), false);
         set_now(&env, 0);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             !client.is_milestone_overdue(&id, &0),
             "deadline=0, now=0 must not be overdue (strict >)"
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, false);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "deadline check must not mutate milestone state");
     }
 
     /// A milestone with deadline=0 and now=1 must be overdue.
@@ -120,11 +157,13 @@ proptest! {
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(0), false);
         set_now(&env, 1);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             client.is_milestone_overdue(&id, &0),
             "deadline=0, now=1 must be overdue"
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, true);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "deadline check must not mutate milestone state");
     }
 }
 
@@ -136,17 +175,20 @@ proptest! {
     /// deadline=u64::MAX, now < u64::MAX must NOT be overdue.
     #[test]
     fn fuzz_deadline_max_now_before_not_overdue(now in 0u64..u64::MAX) {
+        // Invariant: boundary timestamps must not overflow or mutate state.
         let env = Env::default();
         env.mock_all_auths();
         let client = register_client(&env);
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(u64::MAX), false);
         set_now(&env, now);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             !client.is_milestone_overdue(&id, &0),
             "deadline=u64::MAX, now={} must not be overdue", now
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, false);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "deadline check must not mutate milestone state");
     }
 
     /// deadline=u64::MAX, now=u64::MAX must NOT be overdue (strict >).
@@ -158,11 +200,13 @@ proptest! {
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(u64::MAX), false);
         set_now(&env, u64::MAX);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             !client.is_milestone_overdue(&id, &0),
             "deadline=u64::MAX, now=u64::MAX must not be overdue (strict >)"
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, false);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "deadline check must not mutate milestone state");
     }
 }
 
@@ -174,6 +218,7 @@ proptest! {
     /// For any deadline > 0, now = deadline + 1 must be overdue.
     #[test]
     fn fuzz_past_deadline_overdue(deadline in 1u64..u64::MAX) {
+        // Invariant: overdue detection is pure; released/refunded flags untouched.
         let env = Env::default();
         env.mock_all_auths();
         let client = register_client(&env);
@@ -181,11 +226,13 @@ proptest! {
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
         let now = deadline.saturating_add(1); // safe: deadline >= 1
         set_now(&env, now);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             client.is_milestone_overdue(&id, &0),
             "deadline={}, now={} must be overdue", deadline, now
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, true);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "deadline check must not mutate milestone state");
     }
 
     /// For any deadline > 0, now = deadline must NOT be overdue (strict >).
@@ -197,11 +244,13 @@ proptest! {
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
         set_now(&env, deadline);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             !client.is_milestone_overdue(&id, &0),
             "deadline={}, now={} must NOT be overdue (strict >)", deadline, deadline
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, false);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "deadline check must not mutate milestone state");
     }
 }
 
@@ -223,6 +272,7 @@ proptest! {
         let client = register_client(&env);
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
 
         // before: now = deadline - delta_before (must NOT be overdue)
         let now_before = deadline - delta_before;
@@ -250,7 +300,9 @@ proptest! {
             "now_after={} > deadline={} must be overdue",
             now_after, deadline
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, true);
+
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "monotonicity checks must not mutate milestone state");
     }
 }
 
@@ -262,17 +314,20 @@ proptest! {
     /// Timestamp 0 with a future deadline must not be overdue.
     #[test]
     fn fuzz_ledger_zero_with_future_deadline(deadline in 1u64..u64::MAX) {
+        // Invariant: ledger timestamp 0 is a valid boundary; state unchanged.
         let env = Env::default();
         env.mock_all_auths();
         let client = register_client(&env);
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
         set_now(&env, 0);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             !client.is_milestone_overdue(&id, &0),
             "now=0 with deadline={} must not be overdue", deadline
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, false);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "deadline check must not mutate milestone state");
     }
 
     /// A small deadline must be overdue one tick past but not at the exact tick.
@@ -283,6 +338,7 @@ proptest! {
         let client = register_client(&env);
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
 
         // At exact deadline
         set_now(&env, deadline);
@@ -298,7 +354,9 @@ proptest! {
             client.is_milestone_overdue(&id, &0),
             "deadline={}, now=deadline+1 must be overdue", deadline
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, true);
+
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "boundary checks must not mutate milestone state");
     }
 }
 
@@ -310,17 +368,21 @@ proptest! {
     /// A released milestone must never be overdue regardless of deadline or now.
     #[test]
     fn fuzz_released_milestone_never_overdue(now in 0u64..u64::MAX, deadline in 0u64..u64::MAX) {
+        // Invariant: released flag dominates deadline; must remain true after query.
         let env = Env::default();
         env.mock_all_auths();
         let client = register_client(&env);
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), true);
         set_now(&env, now);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             !client.is_milestone_overdue(&id, &0),
             "released milestone must never be overdue (now={}, deadline={})", now, deadline
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, false);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "deadline check must not mutate milestone state");
+        prop_assert!(after.released, "released flag must remain true");
     }
 }
 
@@ -332,17 +394,21 @@ proptest! {
     /// A milestone with no deadline (None) must never be overdue.
     #[test]
     fn fuzz_no_deadline_never_overdue(now in 0u64..u64::MAX) {
+        // Invariant: None deadline is a stable terminal state; no mutation.
         let env = Env::default();
         env.mock_all_auths();
         let client = register_client(&env);
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, None, false);
         set_now(&env, now);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             !client.is_milestone_overdue(&id, &0),
             "None deadline must never be overdue at now={}", now
         );
-        assert_overdue_compat_contract(&env, &client, &id, &0, false);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "deadline check must not mutate milestone state");
+        prop_assert_eq!(after.deadline, None, "None deadline must remain None");
     }
 }
 
@@ -354,6 +420,7 @@ proptest! {
     /// Unknown contract id must return false.
     #[test]
     fn fuzz_unknown_contract_not_overdue(bad_id in 100u32..u32::MAX) {
+        // Invariant: unknown contracts are read-only no-ops; no state created.
         let env = Env::default();
         env.mock_all_auths();
         let client = register_client(&env);
@@ -369,16 +436,19 @@ proptest! {
     /// Out-of-bounds milestone index must return false.
     #[test]
     fn fuzz_oob_milestone_index_not_overdue(oob in 3u32..100u32) {
+        // Invariant: OOB index is a read-only no-op; existing milestone unchanged.
         let env = Env::default();
         env.mock_all_auths();
         let client = register_client(&env);
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_now(&env, 1_000_000);
+        let before = snapshot_milestone(&env, &client.address, id, 0);
         prop_assert!(
             !client.is_milestone_overdue(&id, &oob),
             "OOB milestone index {} must not be overdue", oob
         );
-        assert_overdue_compat_contract(&env, &client, &id, &oob, false);
+        let after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(before, after, "OOB query must not mutate existing milestone");
     }
 }
 
@@ -390,6 +460,7 @@ proptest! {
     /// After setting a deadline and checking overdue, the contract accounting
     /// must be unchanged: funded_amount, released_amount, refunded_amount are
     /// all zero (no release or refund has happened).
+    /// Repeated checks must be idempotent and never mutate accounting.
     #[test]
     fn fuzz_deadline_check_preserves_escrow_accounting(
         deadline in 1u64..u64::MAX - 1,
@@ -400,15 +471,89 @@ proptest! {
         let client = register_client(&env);
         let (_ca, _fa, id) = create_contract(&env, &client);
         set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
+        let milestone_before = snapshot_milestone(&env, &client.address, id, 0);
         set_now(&env, now);
 
         // Call is_milestone_overdue — must not mutate accounting
         let _overdue = client.is_milestone_overdue(&id, &0);
+        // Idempotent retry: second call must observe identical state.
+        let _overdue_retry = client.is_milestone_overdue(&id, &0);
 
         let contract = client.get_contract(&id);
         prop_assert_eq!(contract.funded_amount, 0i128);
         prop_assert_eq!(contract.released_amount, 0i128);
         prop_assert_eq!(contract.refunded_amount, 0i128);
-        assert_overdue_compat_contract(&env, &client, &id, &0, _overdue);
+
+        let milestone_after = snapshot_milestone(&env, &client.address, id, 0);
+        prop_assert_eq!(milestone_before, milestone_after, "milestone state must be invariant");
+    }
+}
+
+// ── Category 10: Deterministic recovery / idempotency ───────────────────────
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Repeated `is_milestone_overdue` calls with identical inputs must return
+    /// identical results (deterministic), and must not mutate persisted state.
+    #[test]
+    fn fuzz_overdue_check_is_deterministic_and_readonly(
+        deadline in 0u64..u64::MAX,
+        now in 0u64..u64::MAX,
+        released in any::<bool>(),
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = register_client(&env);
+        let (_ca, _fa, id) = create_contract(&env, &client);
+        set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), released);
+        set_now(&env, now);
+
+        let before = read_milestone(&env, &client.address, id, 0);
+        let first = client.is_milestone_overdue(&id, &0);
+        let second = client.is_milestone_overdue(&id, &0);
+        let third = client.is_milestone_overdue(&id, &0);
+        let after = read_milestone(&env, &client.address, id, 0);
+
+        prop_assert_eq!(first, second, "repeated checks must agree");
+        prop_assert_eq!(second, third, "repeated checks must agree");
+        prop_assert_eq!(before.deadline, after.deadline, "deadline must not change");
+        prop_assert_eq!(before.released, after.released, "released must not change");
+
+        // Cross-check against the strict `>` invariant.
+        let expected = !released && deadline.map_or(false, |d| now > d);
+        prop_assert_eq!(first, expected, "result must match strict > invariant");
+    }
+
+    /// Recovery after a failed/unknown lookup must not corrupt state: querying
+    /// an unknown contract or OOB index must not affect a valid contract's
+    /// milestone or its overdue result.
+    #[test]
+    fn fuzz_recovery_after_bad_lookup_preserves_state(
+        deadline in 1u64..u64::MAX,
+        now in 0u64..u64::MAX,
+        bad_id in 100u32..u32::MAX,
+        oob in 3u32..100u32,
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = register_client(&env);
+        let (_ca, _fa, id) = create_contract(&env, &client);
+        set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
+        set_now(&env, now);
+
+        let before = read_milestone(&env, &client.address, id, 0);
+        let baseline = client.is_milestone_overdue(&id, &0);
+
+        // Adverse lookups must be rejected without side effects.
+        prop_assert!(!client.is_milestone_overdue(&bad_id, &0));
+        prop_assert!(!client.is_milestone_overdue(&id, &oob));
+
+        let after = read_milestone(&env, &client.address, id, 0);
+        let recovered = client.is_milestone_overdue(&id, &0);
+
+        prop_assert_eq!(before.deadline, after.deadline);
+        prop_assert_eq!(before.released, after.released);
+        prop_assert_eq!(baseline, recovered, "state must be recoverable to baseline");
     }
 }

@@ -186,12 +186,9 @@ impl Escrow {
         let all_released = milestones.iter().all(|m| m.released || m.refunded);
         if all_released {
             contract.status = ContractStatus::Completed;
-            let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
-            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-            let new_pending = pending
-                .checked_add(1)
-                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-            env.storage().persistent().set(&pending_key, &new_pending);
+            // Route through the single accrual policy owned by `lib.rs` so the
+            // credit ledger cannot diverge between release paths.
+            Self::grant_pending_reputation_credit(env, &contract.freelancer);
         }
 
         env.storage().persistent().set(&milestone_key, &milestones);
@@ -436,12 +433,9 @@ impl Escrow {
         let all_released = milestones.iter().all(|m| m.released || m.refunded);
         if all_released {
             contract.status = ContractStatus::Completed;
-            let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
-            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-            let new_pending = pending
-                .checked_add(1)
-                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-            env.storage().persistent().set(&pending_key, &new_pending);
+            // Route through the single accrual policy owned by `lib.rs` so the
+            // credit ledger cannot diverge between release paths.
+            Self::grant_pending_reputation_credit(env, &contract.freelancer);
         }
 
         env.storage().persistent().set(&milestone_key, &milestones);

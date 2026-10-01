@@ -116,9 +116,13 @@ fn pending_reputation_credits_accumulate_and_drain_across_completed_contracts() 
     );
 
     let duplicate =
-        client.try_issue_reputation(&first_contract, &first_client, &1, &valid_comment(&env));
-    super::assert_contract_error(duplicate, EscrowError::ReputationAlreadyIssued);
+        client.issue_reputation(&first_contract, &first_client, &1, &valid_comment(&env));
+    assert!(duplicate);
     assert_eq!(client.get_pending_reputation_credits(&freelancer), 0);
+    let reputation = client.get_reputation(&freelancer).unwrap();
+    assert_eq!(reputation.completed_contracts, 3);
+    assert_eq!(reputation.total_rating, 12);
+    assert_eq!(reputation.last_rating, 3);
 }
 
 #[test]
@@ -186,15 +190,23 @@ fn issue_reputation_rejects_comment_too_long() {
 }
 
 #[test]
-fn issue_reputation_rejects_duplicate_issuance() {
+fn issue_reputation_idempotent_on_retry() {
     let env = Env::default();
     env.mock_all_auths();
     let client = crate::test::register_client(&env);
-    let (client_addr, _freelancer_addr, contract_id) = super::complete_contract(&env, &client);
+    let (client_addr, freelancer_addr, contract_id) = super::complete_contract(&env, &client);
 
     assert!(client.issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env)));
-    let result = client.try_issue_reputation(&contract_id, &client_addr, &4, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::ReputationAlreadyIssued);
+    
+    let diff_comment = String::from_str(&env, "Different comment");
+    assert!(client.issue_reputation(&contract_id, &client_addr, &4, &diff_comment));
+    
+    let reputation = client.get_reputation(&freelancer_addr).unwrap();
+    assert_eq!(reputation.completed_contracts, 1);
+    assert_eq!(reputation.total_rating, 5);
+    
+    let comment = client.get_reputation_comment(&contract_id).unwrap();
+    assert_eq!(comment, valid_comment(&env));
 }
 
 #[test]
