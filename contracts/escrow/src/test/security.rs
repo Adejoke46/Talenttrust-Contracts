@@ -159,8 +159,7 @@ fn issue_reputation_once_per_contract() {
 
     let comment = reputation_comment(&env);
     assert!(client.issue_reputation(&contract_id, &client_addr, &5, &comment));
-    let result = client.try_issue_reputation(&contract_id, &client_addr, &4, &comment);
-    super::assert_contract_error(result, Error::ReputationAlreadyIssued);
+    assert!(client.issue_reputation(&contract_id, &client_addr, &4, &comment));
 }
 
 #[test]

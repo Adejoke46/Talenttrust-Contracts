@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Tests for the bounded batch settlement entrypoint
 //! [`Escrow::finalize_contracts_batch`].
 //!
@@ -19,8 +20,6 @@
 //! | Disputed contract → success                | `batch_settlement_disputed_contract_succeeds`    |
 //! | Freelancer can be the finalizer            | `batch_settlement_freelancer_as_finalizer`       |
 //! | Arbiter can be the finalizer               | `batch_settlement_arbiter_as_finalizer`          |
-
-#![cfg(test)]
 
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 

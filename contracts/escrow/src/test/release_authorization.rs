@@ -606,7 +606,9 @@ fn release_without_approval_fails() {
 #[test]
 fn unauthorized_caller_without_auth_is_rejected() {
     let env = Env::default();
-    env.mock_all_auths();
+    // NOTE: no `mock_all_auths()` here — this test verifies that a caller
+    // who has not signed the invocation is rejected.  With auths mocked the
+    // test would only exercise the role check, not `require_auth()`.
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = setup(&env);
     let id = create(
@@ -618,8 +620,15 @@ fn unauthorized_caller_without_auth_is_rejected() {
         &ReleaseAuthorization::ClientOnly,
     );
     let stranger = Address::generate(&env);
+    // Without mocked auths the host rejects the call before the contract
+    // body runs; the exact error surface is host-defined, so we only assert
+    // that the call does not succeed and no state is mutated.
+    let before = client.get_contract(&id);
     let result = client.try_release_milestone(&id, &stranger, &0);
-    assert_contract_error(result, EscrowError::UnauthorizedRole);
+    assert!(result.is_err(), "unauth caller must not succeed");
+    let after = client.get_contract(&id);
+    assert_eq!(before.released_amount, after.released_amount);
+    assert_eq!(before.status, after.status);
 }
 
 // ===========================================================================

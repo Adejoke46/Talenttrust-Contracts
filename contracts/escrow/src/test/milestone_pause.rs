@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! Dedicated pause-guard tests for all milestone entrypoints.
 //!
 //! Issue #1049: milestone entrypoints must honour the `Paused` / `Emergency`
@@ -17,8 +18,6 @@
 //! `require_not_paused` panics with `Error::ContractPaused` (code 37 in
 //! `types.rs`), **not** `EscrowError::ContractPaused` (code 16 in `lib.rs`).
 //! Tests therefore assert against `Error::ContractPaused`.
-
-#![cfg(test)]
 
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env, String};
 
@@ -42,7 +41,7 @@ fn setup_initialized() -> (Env, Address, Address) {
 /// Create a contract in `Created` status (no SAC, no deposit).
 /// The pause guard fires before any SAC / funding check, so this is enough for
 /// "pause blocks" tests.
-fn setup_created_contract(env: &Env, client: &EscrowClient) -> (Address, Address, u32) {
+fn setup_created_contract(env: &Env, client: &EscrowClient<'_>) -> (Address, Address, u32) {
     let c = Address::generate(env);
     let f = Address::generate(env);
     let id = client.create_contract(
@@ -59,7 +58,7 @@ fn setup_created_contract(env: &Env, client: &EscrowClient) -> (Address, Address
 /// Returns `(env, escrow_addr, admin, client_addr, freelancer_addr, contract_id)`.
 fn setup_funded() -> (Env, Address, Address, Address, Address, u32) {
     let env = Env::default();
-    env.mock_all_auths_allowing_non_root_auth();
+    env.mock_all_auths();
 
     let escrow_addr = env.register(Escrow, ());
     let escrow = EscrowClient::new(&env, &escrow_addr);
