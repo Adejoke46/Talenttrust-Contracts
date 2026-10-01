@@ -1,7 +1,7 @@
 use crate::{
     amount_validation, keys, token_scale, ttl, Contract, ContractStatus, DataKey, Error, Escrow,
-    EscrowArgs, EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization,
-    MAX_MILESTONES,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization,
+    MAX_MAX_MILESTONES, MAX_MILESTONES, MIN_MAX_MILESTONES,
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Vec};
 
@@ -59,6 +59,10 @@ impl Escrow {
             env.panic_with_error(EscrowError::InvalidParticipant);
         }
 
+        if client == freelancer {
+            env.panic_with_error(EscrowError::InvalidParticipant);
+        }
+
         match release_authorization {
             ReleaseAuthorization::ArbiterOnly | ReleaseAuthorization::ClientAndArbiter
                 if arbiter.is_none() =>
@@ -89,13 +93,25 @@ impl Escrow {
             env.panic_with_error(EscrowError::EmptyMilestones);
         }
 
+        if milestones.len() > MAX_MAX_MILESTONES {
+            env.panic_with_error(EscrowError::TooManyMilestones);
+        }
+
         // Enforce the configurable max-milestones cap. The getter defaults to
         // `DEFAULT_MAX_MILESTONES` when no admin override has been stored, and
         // `set_max_milestones` clamps administrative updates to
         // `[MIN_MAX_MILESTONES, MAX_MAX_MILESTONES]`, so this check is
         // bounded and safe regardless of caller intent.
-        let max_milestones = Self::effective_max_milestones(&env);
+        let max_milestones = env
+            .storage()
+            .persistent()
+            .get::<_, u32>(&DataKey::MaxMilestones)
+            .unwrap_or(crate::MAX_MILESTONES);
         if milestones.len() > max_milestones {
+            env.panic_with_error(EscrowError::TooManyMilestones);
+        }
+
+        if max_milestones < MIN_MAX_MILESTONES || max_milestones > MAX_MAX_MILESTONES {
             env.panic_with_error(EscrowError::TooManyMilestones);
         }
 
@@ -111,7 +127,11 @@ impl Escrow {
                 .get::<_, GovernedParameters>(&DataKey::GovernedParameters)
                 .map(|params| params.max_escrow_total_stroops)
                 .unwrap_or(i128::MAX);
-            let configurable = Self::effective_max_escrow_stroops(&env);
+            let configurable = env
+                .storage()
+                .persistent()
+                .get::<_, i128>(&DataKey::MaxEscrowStroops)
+                .unwrap_or(crate::DEFAULT_MAX_TOTAL_ESCROW_STROOPS);
             governed.min(configurable)
         };
 
@@ -127,6 +147,10 @@ impl Escrow {
                 env.panic_with_error(EscrowError::InvalidMilestoneAmount);
             }
             native_milestones[i] = v;
+        }
+
+        if len == 0 || len > MAX_MAX_MILESTONES as usize {
+            env.panic_with_error(EscrowError::TooManyMilestones);
         }
 
         match amount_validation::validate_milestone_amounts(&native_milestones[..len], max_total) {
@@ -148,13 +172,6 @@ impl Escrow {
             token_scale::require_all_exact_scale(&env, native_milestones[..len].iter(), decimals);
         }
 
-        ttl::extend_next_contract_id_ttl(&env);
-        let id = Self::next_contract_id(&env);
-
-        // Retain the original freelancer address alongside `freelancer` so the
-        // created event can publish it without re-cloning once the move into
-        // the Contract struct below is performed.
-        let freelancer_addr = freelancer.clone();
 
         // Construct the contract with all required fields, initialising
         // accounting counters to zero and reputation_issued to false.
@@ -170,6 +187,20 @@ impl Escrow {
             release_authorization,
             reputation_issued: false,
         };
+
+        // Reserve the contract id *before* any further fallible work so that
+        // concurrent or re-entrant invocations cannot observe the same id.
+        // The reservation is a single read-modify-write of `NextContractId`
+        // performed under the host's storage semantics; the collision check
+        // below re-validates the slot immediately before the contract is
+        // written, closing the TOCTOU window between allocation and write.
+        ttl::extend_next_contract_id_ttl(&env);
+        let id = Self::reserve_contract_id(&env);
+
+        // Retain the original freelancer address alongside `freelancer` so the
+        // created event can publish it without re-cloning once the move into
+        // the Contract struct below is performed.
+        let freelancer_addr = freelancer.clone();
 
         env.storage()
             .persistent()
@@ -193,13 +224,6 @@ impl Escrow {
             .persistent()
             .set(&milestone_key, &milestone_vec);
 
-        let next_id = id
-            .checked_add(1)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractIdOverflow));
-        env.storage()
-            .persistent()
-            .set(&DataKey::NextContractId, &next_id);
-
         env.events().publish(
             (symbol_short!("created"), id),
             (client, freelancer.clone(), env.ledger().timestamp()),
@@ -210,16 +234,60 @@ impl Escrow {
 }
 
 impl Escrow {
+    /// Atomically reserves and returns the next available contract ID.
+    ///
+    /// This is the concurrency-safe counterpart to [`Self::next_contract_id`].
+    /// It performs a single read-modify-write of `DataKey::NextContractId`:
+    /// the incremented value is persisted *before* the id is returned to the
+    /// caller, so a concurrent or re-entrant invocation that reaches this
+    /// point cannot observe the same id. The collision check is retained as a
+    /// defensive invariant: if the reserved slot is already occupied the
+    /// reservation is aborted with `ContractIdCollision` rather than silently
+    /// overwriting existing state.
+    ///
+    /// # Errors
+    /// * `ContractIdOverflow`  - If the next id would exceed `u32::MAX`
+    /// * `ContractIdCollision` - If the reserved id slot is already occupied
+    pub(crate) fn reserve_contract_id(env: &Env) -> u32 {
+        let id: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextContractId)
+            .unwrap_or(1);
+
+        if env
+            .storage()
+            .persistent()
+            .get::<_, Contract>(&DataKey::Contract(id))
+            .is_some()
+        {
+            env.panic_with_error(Error::ContractIdCollision);
+        }
+
+        let next_id = id
+            .checked_add(1)
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractIdOverflow));
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextContractId, &next_id);
+
+        id
+    }
+
     /// Returns the next available contract ID and asserts it is not already occupied.
     ///
     /// # Errors
-    /// * `ContractIdCollision` - If the allocated id slot is already occupied
+    /// * `ContractIdCollision` - If either key for the allocated ID is occupied
     pub(crate) fn next_contract_id(env: &Env) -> u32 {
         let id: u32 = env
             .storage()
             .persistent()
             .get(&DataKey::NextContractId)
             .unwrap_or(1);
+
+        if id == 0 {
+            env.panic_with_error(Error::ContractIdOverflow);
+        }
 
         if env
             .storage()

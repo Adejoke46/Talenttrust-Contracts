@@ -1,3 +1,4 @@
+//! Integration tests for milestone status transitions (Issue #1340).
 /// Integration tests for milestone status transitions (Issue #1340).
 ///
 /// These tests verify that:
@@ -13,6 +14,7 @@
 /// - Backward transition: reversed status changes are correctly rejected
 /// - Concurrent transitions: two racing transitions are handled correctly with versioning
 /// - Unknown status: invalid state combinations are rejected safely
+/// - Idempotent retries: repeated identical transitions do not corrupt version state
 use crate::{
     milestone_transitions::{validate_milestone_transition, MilestoneState},
     Address, Contract, ContractStatus, Env, Escrow, Milestone, ReleaseAuthorization,
@@ -67,6 +69,7 @@ fn test_release_milestone_valid_transition_pending_to_released() {
     let freelancer = Address::generate(&env);
     let arbiter = Some(Address::generate(&env));
 
+    let _ = (client, freelancer, arbiter);
     let current_state = MilestoneState::Pending;
     let requested_state = MilestoneState::Released;
 
@@ -226,8 +229,6 @@ fn test_concurrent_transitions_version_check() {
 #[test]
 fn test_milestone_state_both_flags_set_invalid() {
     // Verify that invalid state (both flags set) is rejected safely
-    use crate::milestone_transitions::MilestoneState;
-
     let mut milestone = make_milestone_pending(1000);
     milestone.released = true;
     milestone.refunded = true;
@@ -258,6 +259,7 @@ fn test_release_milestone_client_only_authorization() {
         ReleaseAuthorization::ClientOnly,
     );
 
+    let _ = (contract, caller);
     // Only client should be able to release
     // (Actual authorization check happens in release_milestone_impl via require_auth,
     //  but the centralized transition validator itself is agnostic to auth)
@@ -337,5 +339,116 @@ fn test_all_backward_transitions_use_same_error() {
             Error::InvalidStatusTransition,
             "All invalid transitions should use InvalidStatusTransition error"
         );
+    }
+}
+
+// ── Regression: Idempotent Retry & Concurrency Hardening ─────────────────────
+
+#[test]
+fn test_idempotent_retry_does_not_advance_version() {
+    // A retried transition that observes the same version must not silently
+    // advance the version counter, otherwise concurrent callers could be
+    // tricked into accepting stale writes.
+    use crate::milestone_transitions::{
+        check_version_for_concurrency, read_milestone_version_and_actor,
+        store_milestone_transition,
+    };
+
+    let env = Env::default();
+    let contract_id = 42u32;
+    let milestone_index = 0u32;
+    let actor = Address::generate(&env);
+
+    let v1 = store_milestone_transition(&env, contract_id, milestone_index, actor.clone());
+    assert_eq!(v1, 1);
+
+    // A retry that reads the current version must observe the latest value.
+    let (observed_version, observed_actor) =
+        read_milestone_version_and_actor(&env, contract_id, milestone_index);
+    assert_eq!(observed_version, v1);
+    assert_eq!(observed_actor, actor);
+
+    // The retry must pass the concurrency check without mutating state.
+    assert!(check_version_for_concurrency(&env, contract_id, milestone_index, v1).is_ok());
+
+    // Re-reading must still report the same version (no accidental bump).
+    let (observed_version_again, _) =
+        read_milestone_version_and_actor(&env, contract_id, milestone_index);
+    assert_eq!(observed_version_again, v1);
+}
+
+#[test]
+fn test_concurrent_racing_transitions_only_one_wins() {
+    // Simulate two racing transitions: the first writer advances the version,
+    // and the second writer's stale version must be rejected.
+    use crate::milestone_transitions::{
+        check_version_for_concurrency, store_milestone_transition,
+    };
+
+    let env = Env::default();
+    let contract_id = 7u32;
+    let milestone_index = 0u32;
+    let actor_a = Address::generate(&env);
+    let actor_b = Address::generate(&env);
+
+    // Both racers read version 0.
+    let stale_version = 0u32;
+
+    // Racer A wins and advances to version 1.
+    let v = store_milestone_transition(&env, contract_id, milestone_index, actor_a);
+    assert_eq!(v, 1);
+
+    // Racer B attempts to write using the stale version -> must be rejected.
+    assert!(
+        check_version_for_concurrency(&env, contract_id, milestone_index, stale_version).is_err(),
+        "Racing writer with stale version must be rejected"
+    );
+
+    // Racer B retries with the fresh version -> succeeds.
+    assert!(
+        check_version_for_concurrency(&env, contract_id, milestone_index, v).is_ok(),
+        "Racing writer with fresh version must be accepted"
+    );
+    let v2 = store_milestone_transition(&env, contract_id, milestone_index, actor_b);
+    assert_eq!(v2, 2);
+}
+
+#[test]
+fn test_boundary_transition_matrix_is_total() {
+    // Every (current, requested) pair must yield a deterministic result:
+    // Ok for allowed/idempotent transitions, Err(InvalidStatusTransition)
+    // for everything else. This guards against future matrix regressions.
+    use crate::Error;
+
+    let states = [
+        MilestoneState::Pending,
+        MilestoneState::Released,
+        MilestoneState::Refunded,
+    ];
+
+    for current in states.iter() {
+        for requested in states.iter() {
+            let result = validate_milestone_transition(*current, *requested);
+            let allowed = current == requested
+                || (*current == MilestoneState::Pending
+                    && (*requested == MilestoneState::Released
+                        || *requested == MilestoneState::Refunded));
+            if allowed {
+                assert!(
+                    result.is_ok(),
+                    "Allowed transition {:?}->{:?} must succeed",
+                    current,
+                    requested
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap_err(),
+                    Error::InvalidStatusTransition,
+                    "Disallowed transition {:?}->{:?} must return InvalidStatusTransition",
+                    current,
+                    requested
+                );
+            }
+        }
     }
 }

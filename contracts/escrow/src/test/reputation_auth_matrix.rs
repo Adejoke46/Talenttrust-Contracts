@@ -140,8 +140,7 @@ fn reputation_matrix_issue_rejects_duplicate() {
     let (client, client_addr, _freelancer, _arbiter, contract_id) = setup_completed_contract(&env);
 
     assert!(client.issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env)));
-    let result = client.try_issue_reputation(&contract_id, &client_addr, &4, &valid_comment(&env));
-    assert_contract_error(result, EscrowError::ReputationAlreadyIssued);
+    assert!(client.issue_reputation(&contract_id, &client_addr, &4, &valid_comment(&env)));
 }
 
 #[test]

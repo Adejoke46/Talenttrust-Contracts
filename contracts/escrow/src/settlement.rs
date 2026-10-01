@@ -1,17 +1,17 @@
 //! Typed storage keys and read/write helpers for settlement entries.
 //!
-//! This module replaces ad-hoc key construction for settlement-related
-//! persistent storage with a single, auditable layer. Every settlement
-//! read or write in the contract goes through the helpers defined here,
-//! guaranteeing that the correct `DataKey` variant and storage bucket
-//! (persistent vs. temporary) are always used.
+//! This module is the **single authoritative layer** for every settlement-related
+//! persistent storage read or write in the contract.  Callers must never access
+//! settlement storage keys directly; all paths must go through the helpers
+//! defined here so that the correct [`DataKey`] variant and storage bucket
+//! (always `persistent()`) are consistently used.
 //!
 //! # Storage keys
 //!
-//! | Entry | `DataKey` variant | Bucket |
-//! | --- | --- | --- |
-//! | Settlement token address | `SettlementToken` | `persistent()` |
-//! | Finalization record | `Finalization(contract_id)` | `persistent()` |
+//! | Entry | `DataKey` variant | Bucket | Mutability |
+//! | --- | --- | --- | --- |
+//! | Settlement token address | `SettlementToken` | `persistent()` | **Write-once** |
+//! | Finalization record | `Finalization(contract_id)` | `persistent()` | **Write-once** |
 //!
 //! # Invariants enforced by this module
 //!
@@ -32,6 +32,13 @@
 //! Every `write_*` followed by the corresponding `read_*` returns the
 //! same value.  The `test_settlement_storage` module in `test/` verifies
 //! this invariant plus absent-key behaviour.
+//!
+//! # Write-once guarantee
+//!
+//! [`write_finalization`] refuses to overwrite an existing close record and
+//! panics with [`Error::AlreadyFinalized`] instead, so duplicate or racing
+//! finalization attempts cannot silently discard the original finalizer,
+//! timestamp or summary snapshot.
 
 use crate::{
     finalize::FinalizationRecord,
@@ -40,12 +47,39 @@ use crate::{
 };
 use soroban_sdk::{Address, Env};
 
+/// Result of a commit-once settlement write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CommitOutcome {
+    /// No value existed, so this invocation persisted it.
+    Committed,
+    /// The same value was already persisted; no storage mutation was needed.
+    Recovered,
+}
+
+fn validate_contract_id(contract_id: u32) -> Result<(), Error> {
+    if contract_id == 0 {
+        return Err(Error::InvalidContractId);
+    }
+    Ok(())
+}
+
+fn panic_on_error<T>(env: &Env, result: Result<T, Error>) -> T {
+    result.unwrap_or_else(|error| env.panic_with_error(error))
+}
+
 // ── Settlement token ────────────────────────────────────────────────────────
 
 /// Read the bound settlement token address from persistent storage.
 ///
 /// Returns `None` when no token has been bound yet (`bind_settlement_token`
 /// has not been called).
+///
+/// # Invariants
+///
+/// * Returns `None` before the first successful `bind_settlement_token`.
+/// * Returns `Some(address)` after binding and the value is stable — the token
+///   address can never revert to `None` within the same ledger state.
+/// * No authorization checks; always safe to call from any context.
 ///
 /// # Arguments
 ///
@@ -77,6 +111,24 @@ use soroban_sdk::{Address, Env};
 /// ```
 pub fn read_settlement_token(env: &Env) -> Option<Address> {
     env.storage().persistent().get(&DataKey::SettlementToken)
+}
+
+/// Commit the settlement token address under the canonical storage key.
+///
+/// An identical retry is a no-op. A retry with a different address returns
+/// [`Error::SettlementTokenAlreadyBound`] without changing the original
+/// binding.
+pub(crate) fn commit_settlement_token(env: &Env, token: &Address) -> Result<CommitOutcome, Error> {
+    match read_settlement_token(env) {
+        None => {
+            env.storage()
+                .persistent()
+                .set(&DataKey::SettlementToken, token);
+            Ok(CommitOutcome::Committed)
+        }
+        Some(existing) if existing == *token => Ok(CommitOutcome::Recovered),
+        Some(_) => Err(Error::SettlementTokenAlreadyBound),
+    }
 }
 
 /// Persist the settlement token address under the canonical storage key.
@@ -255,6 +307,13 @@ fn require_valid_contract_id(env: &Env, contract_id: u32) {
 
 /// Construct the canonical [`DataKey`] for a finalization record.
 ///
+/// # Boundary safety
+///
+/// All `u32` values, including `0` and `u32::MAX`, produce a distinct, valid,
+/// non-colliding key.  Business-rule enforcement (e.g., rejecting
+/// `contract_id == 0`) is the caller's responsibility and happens before
+/// reaching this helper.
+///
 /// # Arguments
 ///
 /// * `contract_id` – The numeric contract identifier (must be non-zero).
@@ -281,6 +340,13 @@ pub fn finalization_key(env: &Env, contract_id: u32) -> DataKey {
 }
 
 /// Read a finalization record for `contract_id`, if it exists.
+///
+/// # Invariants
+///
+/// * Returns `None` before `write_finalization` is called for this `contract_id`.
+/// * Returns `Some(record)` after writing.  The `None → Some` transition is
+///   permanent within a given deployment.
+/// * Never panics; performs no authorization.
 ///
 /// # Arguments
 ///
@@ -315,12 +381,19 @@ pub fn finalization_key(env: &Env, contract_id: u32) -> DataKey {
 /// });
 /// ```
 pub fn read_finalization(env: &Env, contract_id: u32) -> Option<FinalizationRecord> {
+    panic_on_error(env, validate_contract_id(contract_id));
     env.storage()
         .persistent()
         .get(&finalization_key(env, contract_id))
 }
 
 /// Return `true` when a finalization record already exists for `contract_id`.
+///
+/// # Invariants
+///
+/// * Returns `false` before `write_finalization` and `true` afterwards.
+/// * The `false → true` transition is permanent within a given deployment.
+/// * Never panics; performs no authorization.
 ///
 /// # Arguments
 ///
@@ -375,6 +448,7 @@ pub fn read_finalization(env: &Env, contract_id: u32) -> Option<FinalizationReco
 /// });
 /// ```
 pub fn is_finalized(env: &Env, contract_id: u32) -> bool {
+    panic_on_error(env, validate_contract_id(contract_id));
     env.storage()
         .persistent()
         .has(&finalization_key(env, contract_id))
@@ -422,7 +496,7 @@ pub fn is_finalized(env: &Env, contract_id: u32) -> bool {
 /// use soroban_sdk::{testutils::Address as _, Address, Env};
 /// use escrow::{
 ///     Escrow, ContractStatus, ContractSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
-///     settlement::{read_finalization, write_finalization},
+///     settlement::{write_finalization, read_finalization},
 /// };
 /// use escrow::finalize::FinalizationRecord;
 ///
@@ -454,6 +528,9 @@ pub fn is_finalized(env: &Env, contract_id: u32) -> bool {
 ///     let loaded = read_finalization(&env, 5).unwrap();
 ///     assert_eq!(loaded.finalizer, finalizer);
 ///     assert_eq!(loaded.timestamp, 1_000_000);
+///
+///     // A second write is rejected: the close record is immutable.
+///     write_finalization(&env, 5, &record); // panics: AlreadyFinalized
 /// });
 /// ```
 pub fn write_finalization(env: &Env, contract_id: u32, record: &FinalizationRecord) {
@@ -498,6 +575,11 @@ pub fn write_finalization(env: &Env, contract_id: u32, record: &FinalizationReco
 
 /// Panic with [`Error::AlreadyFinalized`] if a record already exists for
 /// `contract_id`.
+///
+/// This is the **write-once guard** for finalization records.  Always call
+/// this before [`write_finalization`] in production code paths.  The guard is
+/// idempotent on the read side: calling it when no record exists is safe and
+/// has no side effects.
 ///
 /// # Arguments
 ///
@@ -577,8 +659,22 @@ pub fn require_not_finalized(env: &Env, contract_id: u32) {
 mod tests {
     use super::*;
     use crate::finalize::FinalizationRecord;
-    use crate::{ContractStatus, ContractSummary, Escrow, CONTRACT_SUMMARY_SCHEMA_VERSION};
-    use soroban_sdk::{testutils::Address as _, Address, Env};
+    use crate::{
+        ContractStatus, ContractSummary, Escrow, EscrowClient, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    };
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
+
+    /// Passes the first external token probe but fails the later `decimals`
+    /// dependency call used during binding.
+    #[contract]
+    struct BalanceOnlyToken;
+
+    #[contractimpl]
+    impl BalanceOnlyToken {
+        pub fn balance(_env: Env, _id: Address) -> i128 {
+            0
+        }
+    }
 
     fn setup_contract(env: &Env) -> Address {
         env.register(Escrow, ())
@@ -601,7 +697,15 @@ mod tests {
         }
     }
 
-    // ── Settlement token round-trip ────────────────────────────────────────
+    fn dummy_record(env: &Env) -> FinalizationRecord {
+        FinalizationRecord {
+            finalizer: Address::generate(env),
+            timestamp: 42_000,
+            summary: dummy_summary(env),
+        }
+    }
+
+    // ── Settlement token: absent / bound ──────────────────────────────────
 
     #[test]
     fn settlement_token_absent_returns_none() {
@@ -772,6 +876,129 @@ mod tests {
         });
     }
 
+    // ── require_not_finalized guard ────────────────────────────────────────
+
+    #[test]
+    fn finalization_identical_retry_is_idempotent() {
+        let env = Env::default();
+        let contract = setup_contract(&env);
+        let record = FinalizationRecord {
+            finalizer: Address::generate(&env),
+            timestamp: 100,
+            summary: dummy_summary(&env),
+        };
+
+        env.as_contract(&contract, || {
+            assert_eq!(
+                commit_finalization(&env, 1, &record),
+                Ok(CommitOutcome::Committed)
+            );
+            assert_eq!(
+                commit_finalization(&env, 1, &record),
+                Ok(CommitOutcome::Recovered)
+            );
+            assert_eq!(read_finalization(&env, 1), Some(record));
+        });
+    }
+
+    #[test]
+    fn finalization_conflicting_retry_preserves_original() {
+        let env = Env::default();
+        let contract = setup_contract(&env);
+        let original = FinalizationRecord {
+            finalizer: Address::generate(&env),
+            timestamp: 100,
+            summary: dummy_summary(&env),
+        };
+        let conflicting = FinalizationRecord {
+            finalizer: Address::generate(&env),
+            timestamp: 200,
+            summary: dummy_summary(&env),
+        };
+
+        env.as_contract(&contract, || {
+            assert_eq!(
+                commit_finalization(&env, 1, &original),
+                Ok(CommitOutcome::Committed)
+            );
+            assert_eq!(
+                commit_finalization(&env, 1, &conflicting),
+                Err(Error::AlreadyFinalized)
+            );
+            assert_eq!(read_finalization(&env, 1), Some(original));
+        });
+    }
+
+    #[test]
+    fn finalization_zero_id_is_rejected_without_storage() {
+        let env = Env::default();
+        let contract = setup_contract(&env);
+        let record = FinalizationRecord {
+            finalizer: Address::generate(&env),
+            timestamp: 100,
+            summary: dummy_summary(&env),
+        };
+
+        env.as_contract(&contract, || {
+            assert_eq!(
+                commit_finalization(&env, 0, &record),
+                Err(Error::InvalidContractId)
+            );
+            assert!(!env.storage().persistent().has(&DataKey::Finalization(0)));
+        });
+    }
+
+    #[test]
+    fn finalization_max_id_round_trip() {
+        let env = Env::default();
+        let contract = setup_contract(&env);
+        let record = FinalizationRecord {
+            finalizer: Address::generate(&env),
+            timestamp: u64::MAX,
+            summary: dummy_summary(&env),
+        };
+
+        env.as_contract(&contract, || {
+            assert_eq!(
+                commit_finalization(&env, u32::MAX, &record),
+                Ok(CommitOutcome::Committed)
+            );
+            assert_eq!(read_finalization(&env, u32::MAX), Some(record));
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "HostError: Error(Contract, #4)")]
+    fn finalization_zero_id_read_panics_with_typed_error() {
+        let env = Env::default();
+        let contract = setup_contract(&env);
+        env.as_contract(&contract, || {
+            let _ = read_finalization(&env, 0);
+        });
+    }
+
+    #[test]
+    fn public_finalization_boundaries_return_typed_errors() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let contract = setup_contract(&env);
+        let client = EscrowClient::new(&env, &contract);
+        let finalizer = Address::generate(&env);
+
+        assert_contract_error(
+            client.try_finalize_contract(&0, &finalizer),
+            Error::InvalidContractId,
+        );
+        assert_contract_error(
+            client.try_get_finalization_record(&0),
+            Error::InvalidContractId,
+        );
+        assert_contract_error(
+            client.try_finalize_contract(&u32::MAX, &finalizer),
+            Error::ContractNotFound,
+        );
+    }
+
     #[test]
     fn require_not_finalized_passes_when_absent() {
         let env = Env::default();
@@ -784,6 +1011,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "HostError: Error(Contract, #46)")]
     fn require_not_finalized_panics_when_present() {
+        // Error #46 = AlreadyFinalized
         let env = Env::default();
         let contract = setup_contract(&env);
         let record = FinalizationRecord {
