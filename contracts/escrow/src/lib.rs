@@ -19,6 +19,7 @@
 //! | `migration` | Client migration proposals, acceptance checks, cancellation, and pending-migration reads. | Temporary `DataKey::PendingClientMigration(contract_id)`; reads and updates `DataKey::Contract(contract_id)`. |
 //! | `rollback` | Guarded rollback of unchanged, unresolved disputes. | `DataKey::DisputeRollback(contract_id)`; reads and updates `DataKey::Contract(contract_id)` and its milestones. |
 //! | `ttl` | TTL constants plus helpers for temporary and persistent storage renewal. | Extends caller-provided keys, especially `Contract(id)`, `(Contract(id), "milestones")`, `NextContractId`, participant indexes, approvals, and migrations. |
+//! | `storage_validation` | Input bounds checks for storage-mutating entrypoints, plus the per-contract mutation lock and the checked contract/milestone load-store accessors that reject corrupt state. | Reads and writes `DataKey::ContractMutationLock(contract_id)`; reads and writes `DataKey::Contract(contract_id)`. |
 //! | `types` | Shared Soroban types, error enums, summaries, governance records, dispute records, and the canonical `DataKey` enum. | Declares storage key schema only; does not access storage itself. |
 //! | `utils` | Small deterministic helpers shared by entrypoints, currently ledger timestamp access. | None. |
 //! | `create_contract` | Contract creation, participant/milestone validation, ID allocation, and creation events. | `DataKey::Contract(id)`, `(DataKey::Contract(id), "milestones")`, `NextContractId`, and `GovernedParameters`. |
@@ -310,7 +311,16 @@ impl Escrow {
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
 
+        // Serialise mutation of this contract: a re-entrant call arriving from
+        // the settlement-token transfer below fails with `ConcurrentMutation`
+        // instead of observing a partially-applied deposit.
+        let _mutation_guard =
+            storage_validation::acquire_contract_mutation_lock(&env, contract_id);
+
         let validated = deposit::validate_deposit(&env, contract_id, &caller, amount);
+
+        // Refuse to build on a corrupted record (issue #1535).
+        storage_validation::validate_contract_accounting(&env, &validated.contract);
 
         let token = Self::read_settlement_token(&env)
             .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
@@ -432,11 +442,10 @@ impl Escrow {
         Self::require_not_paused(&env);
         caller.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let _mutation_guard =
+            storage_validation::acquire_contract_mutation_lock(&env, contract_id);
+
+        let mut contract: Contract = storage_validation::load_contract_checked(&env, contract_id);
 
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
@@ -478,6 +487,7 @@ impl Escrow {
 
         let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
         ttl::extend_milestone_ttl(&env, contract_id);
+        storage_validation::validate_milestones_consistency(&env, &milestones);
 
         if milestone_index >= milestones.len() {
             env.panic_with_error(Error::IndexOutOfBounds);
@@ -579,10 +589,9 @@ impl Escrow {
             Self::grant_pending_reputation_credit(&env, &contract.freelancer);
         }
 
+        storage_validation::validate_milestones_consistency(&env, &milestones);
         ttl::store_milestones(&env, contract_id, &milestones);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
+        storage_validation::store_contract_checked(&env, contract_id, &contract);
 
         ttl::extend_contract_ttl(&env, contract_id);
 
@@ -670,11 +679,13 @@ impl Escrow {
             env.panic_with_error(Error::BatchLimitExceeded);
         }
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        // The batch performs a token transfer per item, so the whole batch is
+        // held under the mutation lock: a callback re-entering for this contract
+        // cannot observe the not-yet-persisted intermediate state.
+        let _mutation_guard =
+            storage_validation::acquire_contract_mutation_lock(&env, contract_id);
+
+        let mut contract: Contract = storage_validation::load_contract_checked(&env, contract_id);
 
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
@@ -712,6 +723,7 @@ impl Escrow {
 
         let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
         ttl::extend_milestone_ttl(&env, contract_id);
+        storage_validation::validate_milestones_consistency(&env, &milestones);
 
         let batch_len = milestone_indices.len();
         if let Some(versions) = &expected_versions {
@@ -859,10 +871,9 @@ impl Escrow {
             Self::grant_pending_reputation_credit(&env, &contract.freelancer);
         }
 
+        storage_validation::validate_milestones_consistency(&env, &milestones);
         ttl::store_milestones(&env, contract_id, &milestones);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
+        storage_validation::store_contract_checked(&env, contract_id, &contract);
 
         ttl::extend_contract_ttl(&env, contract_id);
 
@@ -1449,7 +1460,11 @@ impl Escrow {
             }
         }
 
+        let _mutation_guard =
+            storage_validation::acquire_contract_mutation_lock(&env, contract_id);
+
         let mut contract: Contract = Self::require_active_contract(&env, contract_id);
+        storage_validation::validate_contract_accounting(&env, &contract);
         let was_disputed = contract.status == ContractStatus::Disputed;
 
         // Only allow refunds while the contract is still in an active,
@@ -1465,6 +1480,7 @@ impl Escrow {
         contract.client.require_auth();
 
         let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
+        storage_validation::validate_milestones_consistency(&env, &milestones);
 
         if let Some(versions) = &expected_versions {
             if versions.len() != milestone_indices.len() {
@@ -1557,10 +1573,9 @@ impl Escrow {
             }
         }
 
+        storage_validation::validate_milestones_consistency(&env, &milestones);
         ttl::store_milestones(&env, contract_id, &milestones);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
+        storage_validation::store_contract_checked(&env, contract_id, &contract);
 
         if was_disputed {
             rollback::clear_dispute_rollback(&env, contract_id);
@@ -2239,11 +2254,10 @@ impl Escrow {
         Self::require_not_paused(&env);
         client.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let _mutation_guard =
+            storage_validation::acquire_contract_mutation_lock(&env, contract_id);
+
+        let mut contract: Contract = storage_validation::load_contract_checked(&env, contract_id);
 
         ttl::extend_contract_ttl(&env, contract_id);
 
@@ -2271,9 +2285,7 @@ impl Escrow {
             .unwrap_or_else(|| env.panic_with_error(EscrowError::InsufficientFunds));
         contract.status = ContractStatus::Cancelled;
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
+        storage_validation::store_contract_checked(&env, contract_id, &contract);
 
         env.events().publish(
             (symbol_short!("cancelled"), contract_id),
