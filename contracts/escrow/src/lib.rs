@@ -521,26 +521,11 @@ impl Escrow {
         Self::accept_client_migration_impl(&env, contract_id, new_client)
     }
 
-    /// Cancel a live pending client migration.
-    ///
-    /// The current client must authorize the call. A cancel on a terminal
-    /// contract status (`Completed`, `Cancelled`, `Refunded`, `Disputed`) is
-    /// rejected with `InvalidStatusTransition`. Cancelling a non-existent or
-    /// already-expired proposal is rejected with `InvalidState`.
-    ///
-    /// # Errors
-    /// * `ContractNotFound` — `contract_id` is 0 or not found.
-    /// * `ContractPaused` / `EmergencyActive` — system is halted.
-    /// * `UnauthorizedRole` — caller is not the current client.
-    /// * `AlreadyFinalized` — contract is finalized.
-    /// * `InvalidStatusTransition` — contract is in a terminal status.
-    /// * `InvalidState` — no live pending migration exists.
     pub fn cancel_client_migration(
         env: Env,
         contract_id: u32,
         current_client: Address,
     ) -> bool {
-        Self::require_not_paused(&env);
         Self::cancel_client_migration_impl(&env, contract_id, current_client)
     }
 

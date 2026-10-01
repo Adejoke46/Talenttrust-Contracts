@@ -460,49 +460,19 @@ impl Escrow {
 
     /// Cancel a live pending client migration.
     ///
-    /// The current client must authorize the call and be the contract's
-    /// current client.  Only the client that owns the contract may retract a
-    /// pending migration proposal.
-    ///
-    /// ## Validation order
-    /// 1. `contract_id` bounds.
-    /// 2. Contract not paused / in emergency.
-    /// 3. `current_client.require_auth()` — caller authorization.
-    /// 4. Contract not finalized.
-    /// 5. `current_client` matches `contract.client`.
-    /// 6. Terminal-status guard (`require_migration_allowed`) — a cancel on a
-    ///    terminal contract is vacuous and signals a programming error in the
-    ///    caller.
-    /// 7. Live pending record exists.
-    ///
-    /// ## Security note
-    /// The terminal-status guard (step 6) prevents an attacker from spamming
-    /// cancel on completed/cancelled contracts that may share a contract_id with
-    ///  future contracts after a hypothetical ID recycle.
-    ///
-    /// # Errors
-    /// * `ContractNotFound` — `contract_id` is 0 or not found.
-    /// * `ContractPaused` / `EmergencyActive` — system is halted.
-    /// * `UnauthorizedRole` — caller is not the current client.
-    /// * `AlreadyFinalized` — contract is finalized.
-    /// * `InvalidStatusTransition` — contract is in a terminal status.
-    /// * `InvalidState` — no live pending migration exists.
+    /// The current client must authorize the call, be the contract's client, and a live pending migration must exist.
+    /// The pending migration entry is removed and a `client_migration_cancelled` event is emitted.
     pub(crate) fn cancel_client_migration_impl(
         env: &Env,
         contract_id: u32,
         current_client: Address,
     ) -> bool {
-        // 1. bounds
         storage::validate_contract_id_bounds(env, contract_id);
-        // 2. pause guard
         Self::require_not_paused(env);
-        // 3. caller authorization
         current_client.require_auth();
 
         let contract = Self::load_contract(env, contract_id);
-        // 4. finalization guard
         Self::require_not_finalized(env, contract_id);
-        // 5. identity check
         if current_client != contract.client {
             env.panic_with_error(EscrowError::UnauthorizedRole);
         }
@@ -510,18 +480,11 @@ impl Escrow {
         Self::require_migration_allowed(env, contract.status);
 
         let key = Self::pending_migration_key(contract_id);
-        // 7a. Bump TTL while reading so the record cannot be evicted partway
-        //     through validation.
-        extend_if_below_threshold(
-            env,
-            &key,
-            PENDING_MIGRATION_BUMP_THRESHOLD,
-            PENDING_MIGRATION_TTL_LEDGERS,
-        );
-        // 7b. A live record must exist; absent / evicted ⇒ InvalidState.
+        // Ensure a pending migration exists, otherwise panic with InvalidState
         let _: PendingClientMigration = read_if_live(env, &key)
             .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
 
+        // Remove the pending migration entry
         remove_transient(env, &key);
 
         env.events().publish(
@@ -567,3 +530,7 @@ impl Escrow {
             .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState))
     }
 }
+
+#[cfg(test)]
+#[path = "migration_test.rs"]
+mod migration_test;
