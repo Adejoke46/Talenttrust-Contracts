@@ -61,7 +61,7 @@ mod test_pause_scope;
 mod storage_validation;
 mod event_assertions;
 mod governance_proposal;
-mod lifecycle_invariants;
+mod keys_validation;
 mod simulate_create_contract;
 mod simulate_deposit;
 mod simulate_refund;

@@ -297,7 +297,7 @@ pub fn approve_milestone(
     }
 
     // Load or create approval record
-    let approval_key = keys::milestone_approval_key(contract_id, milestone_index);
+    let approval_key = keys::milestone_approval_key(env, contract_id, milestone_index);
     let mut approvals: MilestoneApprovals =
         env.storage()
             .persistent()
@@ -548,7 +548,7 @@ pub fn check_approvals(
     contract_id: u32,
     milestone_index: u32,
 ) -> Result<bool, Error> {
-    let approval_key = keys::milestone_approval_key(contract_id, milestone_index);
+    let approval_key = keys::milestone_approval_key(env, contract_id, milestone_index);
 
     // Load approvals from persistent storage.
     let approvals: Option<MilestoneApprovals> = env.storage().persistent().get(&approval_key);
@@ -653,8 +653,8 @@ pub fn revoke_approval(
 /// * `contract_id` - The contract ID
 /// * `milestone_index` - The milestone index
 pub fn clear_approvals(env: &Env, contract_id: u32, milestone_index: u32) {
-    let approval_key = keys::milestone_approval_key(contract_id, milestone_index);
-    env.storage().persistent().remove(&approval_key);
+    let approval_key = keys::milestone_approval_key(env, contract_id, milestone_index);
+    env.storage().temporary().remove(&approval_key);
 }
 
 /// Returns a bounded, paginated read view of authorization records for a contract's milestones.
