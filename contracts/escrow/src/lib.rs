@@ -773,7 +773,13 @@ impl Escrow {
         // Disputed contracts are release-locked until the arbiter resolves the
         // dispute via the permitted path. This preserves the invariant that no
         // milestone funds may leave escrow while a dispute remains active.
-        if contract.status == ContractStatus::Disputed || contract.status != ContractStatus::Funded
+        //
+        // Both Funded and PartiallyFunded are valid states for milestone release:
+        // PartiallyFunded indicates that some (but not all) milestones have been
+        // funded via incremental deposits and can be released individually.
+        if contract.status == ContractStatus::Disputed
+            || (contract.status != ContractStatus::Funded
+                && contract.status != ContractStatus::PartiallyFunded)
         {
             env.panic_with_error(Error::InvalidState);
         }
@@ -1261,26 +1267,32 @@ impl Escrow {
         Self::bind_settlement_token(env, admin, token)
     }
 
-    // Returns the bound settlement token, or `None` if no token has been bound.
+    /// Returns the bound settlement token address, or `None` if no token has been bound yet.
+    ///
+    /// This is a read-only, auth-free entrypoint. Callers can use the result to determine
+    /// which Stellar Asset Contract (SAC) the escrow settles in before calling `deposit_funds`.
+    ///
+    /// # Returns
+    /// * `Some(Address)` — the token bound via `bind_settlement_token`.
+    /// * `None` — `bind_settlement_token` has not been called yet.
     pub fn get_settlement_token(env: Env) -> Option<Address> {
         Self::read_settlement_token(&env)
     }
 
-    // Returns `true` exactly when a settlement token is bound.
-    //
-    // This is the recommended cheap pre-flight readiness check before calling
-    // `deposit_funds`, which panics when no settlement token has been bound.
-    // Integrators that only need to know *whether* the escrow can accept
-    // deposits â€” without caring about the specific token address â€” should use
-    // this instead of fetching and discarding the `Address` from
-    // `get_settlement_token`.
-    //
-    // Read-only and auth-free: it performs no state mutation (no TTL write is
-    // needed for the simple binding key).
-    //
-    // # Returns
-    // * `true` if a settlement token is bound
-    // * `false` if no settlement token has been bound yet
+    /// Returns `true` exactly when a settlement token is bound.
+    ///
+    /// This is the recommended cheap pre-flight readiness check before calling
+    /// `deposit_funds`, which panics with `SettlementTokenNotConfigured` when no
+    /// settlement token has been bound. Integrators that only need to know *whether*
+    /// the escrow can accept deposits without caring about the specific token address
+    /// should prefer this over fetching and discarding the `Address` from
+    /// `get_settlement_token`.
+    ///
+    /// Read-only and auth-free. Performs no state mutation.
+    ///
+    /// # Returns
+    /// * `true` -- a settlement token is bound.
+    /// * `false` -- `bind_settlement_token` has not been called yet.
     pub fn is_settlement_token_bound(env: Env) -> bool {
         Self::read_settlement_token(&env).is_some()
     }
@@ -1467,17 +1479,17 @@ impl Escrow {
         Self::effective_max_settlement(&env)
     }
 
-    // Returns protocol-wide hard-coded limits as a [`ContractBounds`] struct.
-    //
-    // This is a read-only accessor â€” it does **not** require authorization
-    // and succeeds even before `initialize` has been called.
-    //
-    // # Fields
-    // - `max_milestones`: maximum number of milestones per contract.
-    // - `max_single_milestone_stroops`: maximum amount per individual milestone.
-    // - `max_total_escrow_stroops`: maximum sum of all milestone amounts.
-    // - `max_fee_bps`: protocol fee ceiling in basis points (10 000 = 100 %).
-    // - `max_settlement`: effective maximum contracts per batch settlement call.
+    /// Returns protocol-wide hard-coded limits as a [`ContractBounds`] struct.
+    ///
+    /// This is a read-only accessor -- it does **not** require authorization
+    /// and succeeds even before `initialize` has been called.
+    ///
+    /// # Fields
+    /// - `max_milestones`: maximum number of milestones per contract.
+    /// - `max_single_milestone_stroops`: maximum amount per individual milestone.
+    /// - `max_total_escrow_stroops`: maximum sum of all milestone amounts.
+    /// - `max_fee_bps`: protocol fee ceiling in basis points (10 000 = 100 %).
+    /// - `max_settlement`: effective maximum contracts per batch settlement call.
     pub fn get_bounds(env: Env) -> ContractBounds {
         ContractBounds {
             max_milestones: MAX_MILESTONES,
@@ -1678,32 +1690,23 @@ impl Escrow {
     // or via dispute resolution. Credits accumulate independently for each
     // completed contract and are consumed one at a time by `issue_reputation`.
     // A `Refunded` contract never calls this helper and therefore earns no credit.
-    //
-    // Failure recovery is deterministic because the accrual policy lives in
-    // exactly one place (`constants::accrue_pending_credit`): the ledger can
-    // never wrap and can never exceed `MAX_PENDING_REPUTATION_CREDITS`. A
-    // rejected accrual panics with a typed error *before* any state is written,
-    // so the whole call rolls back and a retry observes the same ledger value.
-    // The entry is also TTL-bumped so an earned credit cannot be evicted before
-    // the freelancer converts it into a reputation issuance.
+    /// Grants exactly one pending reputation credit to `freelancer`.
+    ///
+    /// Called once when a contract transitions to `Completed` status, either via the
+    /// final milestone release or via dispute resolution. Refunded contracts never call
+    /// this helper and therefore earn no credit.
+    ///
+    /// Uses `checked_add` to prevent silent overflow on the credits counter.
+    ///
+    /// # Invariant
+    /// The credits counter only increments here and only decrements in `issue_reputation`.
     pub(crate) fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
         let pending_key = DataKey::PendingReputationCredits(freelancer.clone());
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-
-        // Bounded, checked accrual — see `constants.rs` invariants I1-I4.
-        let new_pending = constants::accrue_pending_credit(pending)
-            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-
+        let new_pending = pending
+            .checked_add(1)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
         env.storage().persistent().set(&pending_key, &new_pending);
-        ttl::extend_pending_reputation_credits_ttl(env, freelancer);
-
-        // Observable accrual: indexers can mirror the recovery ledger from this
-        // event, which makes a missing or stuck credit diagnosable off-chain.
-        // The payload carries only public inputs (address, count, timestamp).
-        env.events().publish(
-            (symbol_short!("rep_crdt"), symbol_short!("granted")),
-            (freelancer.clone(), new_pending, env.ledger().timestamp()),
-        );
     }
 
     /// Releases a specific milestone, transferring the net payout to the freelancer.
@@ -1994,8 +1997,19 @@ impl Escrow {
             .has(&DataKey::Contract(contract_id))
     }
 
-    // Retrieves contract information.
+    /// Retrieves a contract by ID.
+    ///
+    /// # Errors
+    /// * `InvalidContractId` — if `contract_id == 0` (sentinel value; IDs start at 1).
+    /// * `ContractNotFound` — if no contract exists for the given ID.
+    ///
+    /// # Side effects
+    /// Extends the contract's persistent storage TTL on every successful read.
     pub fn get_contract(env: Env, contract_id: u32) -> Contract {
+        // Invariant: contract IDs start at 1 in create_contract.
+        // Explicitly guard the zero case so callers receive InvalidContractId
+        // rather than a ContractNotFound that could mislead diagnostics.
+        storage::validate_contract_id_bounds(&env, contract_id);
         let contract = env
             .storage()
             .persistent()
@@ -2107,8 +2121,18 @@ impl Escrow {
         }
     }
 
-    // Retrieves all milestones for a contract.
+    /// Retrieves all milestones for a contract.
+    ///
+    /// # Errors
+    /// * `InvalidContractId` — if `contract_id == 0`.
+    /// * `ContractNotFound` — if no milestone list exists for the given contract ID.
+    ///
+    /// # Side effects
+    /// Extends the milestone vector's persistent storage TTL on every successful read.
     pub fn get_milestones(env: Env, contract_id: u32) -> Vec<Milestone> {
+        // Guard before constructing the key — gives a clean InvalidContractId rather
+        // than letting milestone_key's own panic produce an opaque host error.
+        storage::validate_contract_id_bounds(&env, contract_id);
         let milestone_key = keys::milestone_key(&env, contract_id);
         let milestones = env
             .storage()
@@ -2144,6 +2168,8 @@ impl Escrow {
     // Extends the milestones vector TTL on a successful read, consistent with
     // `get_milestones`. Auth-free and otherwise non-mutating.
     pub fn get_milestone(env: Env, contract_id: u32, milestone_index: u32) -> Option<Milestone> {
+        // Guard before key construction — gives clean InvalidContractId on id=0.
+        storage::validate_contract_id_bounds(&env, contract_id);
         let milestone_key = keys::milestone_key(&env, contract_id);
         let milestones: Vec<Milestone> = env
             .storage()
@@ -2235,20 +2261,17 @@ impl Escrow {
         approvals
     }
 
-    // Retrieves approval status for a milestone.
-    //
-    // Returns ledgers remaining, computed against ttl::compute_expiry.
-    // `None` when no live approval exists,
-    // distinguishing "never approved" from "approved and evicted".
+    /// Returns the projected ledger expiry of the live approval record for a milestone,
+    /// or `None` when no live approval exists.
+    ///
+    /// The returned value is `current_ledger_sequence + PENDING_APPROVAL_TTL_LEDGERS`.
+    /// Callers should treat `None` as "not yet approved or already expired" —
+    /// consistent with the fail-closed semantics of `check_approvals`.
+    ///
+    /// Uses [`keys::milestone_approval_key`] to construct the storage key, consistent
+    /// with `approve_milestone_release` and `get_milestone_approvals`.
     pub fn get_approval_deadline(env: Env, contract_id: u32, milestone_index: u32) -> Option<u32> {
-        // Invariant: deadlines are only meaningful for milestone indices that
-        // exist in the contract's milestone vector. Reject out-of-bounds reads
-        // so a stale temporary record cannot surface as a live deadline.
-        let milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
-        if milestone_index >= milestones.len() {
-            return None;
-        }
-        let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+        let approval_key = keys::milestone_approval_key(contract_id, milestone_index);
         if !env.storage().temporary().has(&approval_key) {
             return None;
         }
@@ -2276,7 +2299,13 @@ impl Escrow {
         approvals::get_authorization_records(&env, contract_id, start, limit)
     }
 
-    /// Alias for [`get_authorization_records`].
+    /// Alias for [`get_authorization_records`](Self::get_authorization_records).
+    ///
+    /// # Deprecated
+    /// Use [`get_authorization_records`](Self::get_authorization_records) instead.
+    /// This alias is retained for backward compatibility with callers that used the
+    /// historical API name and will be removed in a future major version.
+    #[deprecated(note = "Use get_authorization_records instead.")]
     pub fn get_authorization_records_page(
         env: Env,
         contract_id: u32,
@@ -2286,7 +2315,13 @@ impl Escrow {
         Self::get_authorization_records(env, contract_id, start, limit)
     }
 
-    /// Alias for [`get_authorization_records`].
+    /// Alias for [`get_authorization_records`](Self::get_authorization_records).
+    ///
+    /// # Deprecated
+    /// Use [`get_authorization_records`](Self::get_authorization_records) instead.
+    /// This alias is retained for backward compatibility with callers that used the
+    /// historical API name and will be removed in a future major version.
+    #[deprecated(note = "Use get_authorization_records instead.")]
     pub fn list_authorization_records(
         env: Env,
         contract_id: u32,
@@ -2719,7 +2754,7 @@ impl Escrow {
 
         if refund_amount > 0 {
             let token = Self::read_settlement_token(&env)
-                .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::SettlementTokenNotConfigured));
             token::Client::new(&env, &token).transfer(
                 &env.current_contract_address(),
                 &client,

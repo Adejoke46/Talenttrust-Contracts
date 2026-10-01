@@ -66,6 +66,7 @@ mod simulate_create_contract;
 mod simulate_deposit;
 mod simulate_refund;
 mod simulate_release;
+mod test_compat_contracts;
 mod test_concurrent_keys;
 mod token_scale;
 mod ttl_tests;
