@@ -43,23 +43,12 @@
 //! same value.  The `test_settlement_storage` module in `test/` verifies
 //! this invariant plus absent-key behaviour.
 //!
-//! # Concurrency and idempotency invariants
+//! # Write-once guarantee
 //!
-//! Settlement state transitions must be safe under concurrent or repeated
-//! execution.  The helpers below enforce the following invariants:
-//!
-//! 1. **Write-once settlement token.** [`write_settlement_token`] is
-//!    guarded by [`require_settlement_token_unbound`], which panics with
-//!    [`Error::SettlementTokenAlreadyBound`] if a token is already bound.
-//!    This prevents a racing or retried bind from silently rebinding the
-//!    token to a different address.
-//! 2. **Write-once finalization.** [`write_finalization`] is guarded by
-//!    [`require_not_finalized`], which panics with
-//!    [`Error::AlreadyFinalized`] if a record already exists.  A racing or
-//!    retried finalize therefore cannot overwrite a prior record.
-//! 3. **Atomic check-and-write.** The guard and the write are performed in
-//!    the same contract invocation, so Soroban's transactional execution
-//!    model guarantees that either both happen or neither does.
+//! [`write_finalization`] refuses to overwrite an existing close record and
+//! panics with [`Error::AlreadyFinalized`] instead, so duplicate or racing
+//! finalization attempts cannot silently discard the original finalizer,
+//! timestamp or summary snapshot.
 
 use crate::{finalize::FinalizationRecord, DataKey, Error};
 use soroban_sdk::{Address, Env};
@@ -500,14 +489,15 @@ pub fn is_finalized(env: &Env, contract_id: u32) -> bool {
 
 /// Persist a finalization record.
 ///
-/// # ⚠ Precondition — write-once semantics
+/// The write is **write-once**: if a record already exists for `contract_id`
+/// this panics with [`Error::AlreadyFinalized`] instead of overwriting it. The
+/// check lives in the storage layer so the immutability guarantee does not
+/// depend on every future caller remembering to guard first; callers are still
+/// expected to check [`is_finalized`] up front so that a duplicate call is
+/// rejected without any state change.
 ///
-/// This is a **raw write**.  Callers are responsible for calling
-/// [`require_not_finalized`] before this helper to enforce the write-once
-/// invariant.  Writing a second time to the same `contract_id` silently
-/// overwrites the existing record, which breaks the immutability guarantee of
-/// finalization records.  The `finalize_contract_impl` entrypoint in
-/// `finalize.rs` enforces this guard; all new callers must do the same.
+/// TTL policy is *not* applied here — the caller owns it (see
+/// `crate::ttl::extend_finalization_ttl`).
 ///
 /// # Arguments
 ///
@@ -515,13 +505,17 @@ pub fn is_finalized(env: &Env, contract_id: u32) -> bool {
 /// * `contract_id` – The numeric contract identifier.
 /// * `record`      – The [`FinalizationRecord`] to persist.
 ///
+/// # Errors
+///
+/// Panics with [`Error::AlreadyFinalized`] when a record already exists.
+///
 /// # Example
 ///
 /// ```no_run
 /// use soroban_sdk::{testutils::Address as _, Address, Env};
 /// use escrow::{
 ///     Escrow, ContractStatus, ContractSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
-///     settlement::{read_finalization, write_finalization},
+///     settlement::{write_finalization, read_finalization},
 /// };
 /// use escrow::finalize::FinalizationRecord;
 ///
@@ -553,36 +547,16 @@ pub fn is_finalized(env: &Env, contract_id: u32) -> bool {
 ///     let loaded = read_finalization(&env, 5).unwrap();
 ///     assert_eq!(loaded.finalizer, finalizer);
 ///     assert_eq!(loaded.timestamp, 1_000_000);
+///
+///     // A second write is rejected: the close record is immutable.
+///     write_finalization(&env, 5, &record); // panics: AlreadyFinalized
 /// });
 /// ```
 pub fn write_finalization(env: &Env, contract_id: u32, record: &FinalizationRecord) {
-    let _ = panic_on_error(env, commit_finalization(env, contract_id, record));
-}
-
-/// Atomically write a finalization record, panicking with
-/// [`Error::AlreadyFinalized`] if one already exists.
-///
-/// This is the preferred entry point for finalization under concurrent or
-/// repeated execution: it combines the [`require_not_finalized`] guard and
-/// the [`write_finalization`] write into a single call so callers cannot
-/// accidentally skip the guard.  Because both operations run in the same
-/// invocation, Soroban's transactional execution model guarantees that a
-/// racing or retried finalize either writes exactly once or panics without
-/// mutating state.
-///
-/// # Arguments
-///
-/// * `env`         – The Soroban environment.
-/// * `contract_id` – The numeric contract identifier.
-/// * `record`      – The [`FinalizationRecord`] to persist.
-///
-/// # Errors
-///
-/// Panics with [`Error::AlreadyFinalized`] when a record already exists for
-/// `contract_id`.
-pub fn write_finalization_once(env: &Env, contract_id: u32, record: &FinalizationRecord) {
     require_not_finalized(env, contract_id);
-    write_finalization(env, contract_id, record);
+    env.storage()
+        .persistent()
+        .set(&finalization_key(contract_id), record);
 }
 
 /// Panic with [`Error::AlreadyFinalized`] if a record already exists for

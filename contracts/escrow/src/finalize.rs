@@ -1,79 +1,41 @@
-//! Finalization: closing an escrow contract with an immutable record.
+//! Immutable close records for finished escrow contracts.
 //!
-//! The record is stored once under `DataKey::Finalization(contract_id)`.  After
-//! it exists, all contract-specific mutating entrypoints reject with
-//! `Error::AlreadyFinalized`.
+//! # Finalization invariants
 //!
-//! # Why finalization needs a strict failure model
+//! Finalization is the terminal, one-shot state transition of a contract. The
+//! following invariants hold for every execution of
+//! [`finalize_contract_impl`] and are relied upon by every other mutating
+//! entrypoint (they all guard through [`Escrow::require_not_finalized`]):
 //!
-//! Finalization is the only operation in this contract that writes an
-//! **immutable** record.  There is no rewrite path: whatever is sealed is what
-//! every later reader, indexer and audit sees forever.  That has two
-//! consequences that shape the whole design in this module.
-//!
-//! 1. **Nothing may be sealed optimistically.**  A summary is only written once
-//!    it has been fully validated, so a rejected seal can never leave a
-//!    half-correct record behind and a corrupted input can never be frozen into
-//!    storage.
-//! 2. **Rejection must be deterministic.**  The same input must always produce
-//!    the same error, in a debug build and in a release build, and regardless
-//!    of how many times the caller retries.  This rules out unchecked
-//!    arithmetic (which wraps silently in `--release` and panics in debug) and
-//!    rules out guard ordering that lets an incidental check mask the real
-//!    reason a call was refused.
-//!
-//! # Failure model
-//!
-//! `finalize_contract_impl` runs in three phases.  Phases 1 and 2 are
-//! read-only; nothing is persisted unless every check in them passes.  Phase 3
-//! performs the writes and cannot panic.
-//!
-//! | Phase | Purpose | May panic |
-//! | --- | --- | --- |
-//! | 1. Preconditions | Establish that the call is allowed, in a fixed order | yes |
-//! | 2. Build + validate summary | Project state into a close summary and reconcile it | yes |
-//! | 3. Commit | Write the seal, drop the dispute snapshot, publish the event | no |
-//!
-//! Because a Soroban invocation is atomic, a panic in phases 1–2 discards the
-//! whole transaction.  The contract is therefore left exactly as it was found:
-//! still mutable, still unfinalized, and still repairable.  A retry after
-//! resolving the reported condition behaves identically every time.
-//!
-//! # Invariants enforced before sealing
-//!
-//! - **I1 — no negative ledger totals.**  `funded_amount`, `released_amount`
-//!   and `refunded_amount` are only ever increased by `checked_add` of positive
-//!   amounts, so a negative value can only come from corrupt state.
-//! - **I2 — payments cannot exceed funding.**
-//!   `released_amount + refunded_amount <= funded_amount`.  The money-movement
-//!   paths enforce the stronger
-//!   `released + refunded + protocol_fees <= funded`, which implies this.
-//! - **I3 — funding cannot exceed the milestone total.**  `deposit_funds`
-//!   rejects any deposit that would push `funded_amount` past the sum of the
-//!   milestone amounts, so `funded_amount <= total_amount` holds for every
-//!   reachable state.  This also catches a contract record that has been
-//!   restored from an archive which is out of step with its milestone vector.
-//! - **I4 — a milestone is never both released and refunded.**  The milestone
-//!   transition matrix treats those two flags as mutually exclusive terminal
-//!   states, so the combination is unreachable; sealing it would freeze an
-//!   unauditable contradiction into an immutable record.
-//! - **I5 — the summary is a faithful projection of the contract record.**
-//!   Status and every amount in the summary are re-checked against the
-//!   contract they were derived from immediately before the seal is written.
-//!
-//! # Storage lifetime
-//!
-//! A finalization record *is* the `is_finalized` flag for the entire contract,
-//! so it must obey the same persistent TTL policy as the contract and
-//! milestone entries it summarises.  Without that, the seal could silently
-//! lapse and a second finalizer could re-seal the same contract with a
-//! different finalizer and timestamp.  The seal is therefore written with the
-//! standard [`PERSISTENT_TTL_LEDGERS`] policy, renewed on read through
-//! `get_finalization_record`, and the contract and milestone entries it reads
-//! are refreshed up front so a finalizable contract cannot be wedged by TTL
-//! expiry part-way through being closed.
-//!
-//! [`PERSISTENT_TTL_LEDGERS`]: crate::ttl::PERSISTENT_TTL_LEDGERS
+//! 1. **Write-once** — at most one [`FinalizationRecord`] exists per
+//!    `contract_id`. The record is written through
+//!    [`crate::settlement::write_finalization`], which refuses to overwrite an
+//!    existing record, and the duplicate-work guard runs before any mutation.
+//! 2. **First writer wins / deterministic losers** — of two racing or repeated
+//!    calls for the same contract, exactly one succeeds. Every other attempt
+//!    panics with [`Error::AlreadyFinalized`] *before* touching state, so it
+//!    publishes no event, clears no rollback record and cannot be partially
+//!    applied. Retrying is therefore safe and idempotent: the observable state
+//!    after N attempts equals the state after one.
+//! 3. **Durable guard** — the record's TTL is set to
+//!    [`crate::ttl::PERSISTENT_TTL_LEDGERS`] when written, refreshed whenever
+//!    the guard is consulted ([`Escrow::is_finalized`]) and refreshed whenever
+//!    the contract entry it guards is extended (see
+//!    [`crate::ttl::extend_contract_ttl`]). The record can therefore never be
+//!    evicted while the contract entry is still live, which keeps
+//!    `AlreadyFinalized` and `get_finalization_record` consistent for the whole
+//!    life of the contract.
+//! 4. **No reentrancy surface** — this path performs no token transfer and no
+//!    cross-contract call, so there is no external code that could re-enter the
+//!    escrow between the guard check and the record write. The record write is
+//!    the terminal claim and every other effect follows it.
+//! 5. **Freeze before mutation** — the pause/emergency gate runs before any
+//!    state is written, so a paused or emergency-frozen escrow cannot be
+//!    closed. Authorization runs before the finalizer role is evaluated.
+//! 6. **Checked accounting** — the summary snapshot uses checked arithmetic, so
+//!    a contract whose `funded - released - refunded` accounting is inconsistent
+//!    fails loudly with [`Error::AccountingInvariantViolated`] instead of
+//!    writing a silently wrong `refundable_balance`.
 
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
@@ -138,8 +100,21 @@ impl Escrow {
         Self::load_contract_for_finalization(env, contract_id)
     }
 
+    /// Returns `true` when a finalization record already exists.
+    ///
+    /// Reading the guard refreshes the record's TTL so that observing a
+    /// finalized contract also renews the guarantee that stays finalized. This
+    /// is a bump-on-read strategy; it never creates or mutates the record
+    /// itself.
     pub(crate) fn is_finalized(env: &Env, contract_id: u32) -> bool {
-        settlement::is_finalized(env, contract_id)
+        let finalized = env
+            .storage()
+            .persistent()
+            .has(&Self::finalization_key(contract_id));
+        if finalized {
+            crate::ttl::extend_finalization_ttl(env, contract_id);
+        }
+        finalized
     }
 
     pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) {
@@ -207,46 +182,15 @@ impl Escrow {
         }
     }
 
-    /// Project the live contract state into an immutable close summary.
+    /// Builds the immutable summary snapshot stored with the record.
     ///
-    /// This function only reads.  It performs no writes, so a panic here leaves
-    /// no trace and the caller can safely run it before the commit phase.
-    ///
-    /// All arithmetic is checked.  Under `--release` the workspace does not
-    /// enable `overflow-checks`, so an unchecked `+` or `-` on `i128` wraps
-    /// silently in a release build and panics in a debug build — the same input
-    /// would then produce two different results depending on how the contract
-    /// was compiled.  Every accumulation and subtraction below is therefore
-    /// `checked_*` and maps a failure onto a typed error.
-    ///
-    /// # Panics
-    /// - `FinalizationStateIncomplete` when the milestone vector is absent.  The
-    ///   contract record exists, so this is not `ContractNotFound`: the honest
-    ///   signal is that the close summary cannot be built from the state that
-    ///   is actually present.  Refusing here is deliberate — sealing an empty
-    ///   milestone list would freeze a `total_amount` of `0` and a release count
-    ///   of `0` into a permanent record that contradicts the contract it
-    ///   describes.
-    /// - `PotentialOverflow` when the milestone amounts do not sum to an `i128`.
-    /// - `AccountingInvariantViolated` when a milestone claims to be both
-    ///   released and refunded (invariant I4).
+    /// Reads the milestone vector through [`crate::ttl::load_milestones`] so the
+    /// snapshot and the on-ledger milestones are read from a single, TTL-bumped
+    /// source. Every derived value is computed with checked arithmetic: a
+    /// contract whose accounting does not add up is rejected loudly instead of
+    /// being frozen into the permanent record with a wrong balance.
     fn summarize_contract(env: &Env, contract_id: u32, contract: &Contract) -> ContractSummary {
-        let milestone_key = crate::keys::milestone_key(env, contract_id);
-        let milestones: Vec<Milestone> = match env.storage().persistent().get(&milestone_key) {
-            Some(milestones) => milestones,
-            None => env.panic_with_error(Error::FinalizationStateIncomplete),
-        };
-        // The milestone vector carries its own TTL, independent of the contract
-        // entry. Refresh it so the vector this summary is built from stays live
-        // for as long as the seal that quotes it.
-        ttl::extend_milestone_ttl(env, contract_id);
-
-        // Invariant: milestone count must be non-zero for a finalized
-        // contract. A zero-milestone contract cannot have a meaningful
-        // accounting snapshot and indicates corrupted state.
-        if milestones.is_empty() {
-            env.panic_with_error(Error::InvalidState);
-        }
+        let milestones: Vec<Milestone> = crate::ttl::load_milestones(env, contract_id);
 
         let mut total_amount: i128 = 0;
         let mut released_milestone_count: u32 = 0;
@@ -287,21 +231,14 @@ impl Escrow {
             });
         }
 
-        // I2 (at the point of computation): derive the refundable balance with
-        // checked subtraction. `require_sealable_accounting` proves the result
-        // is non-negative; this proves it is computed the same way in every
-        // build profile.
-        let paid = contract
-            .released_amount
-            .checked_add(contract.refunded_amount)
-            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
         let refundable_balance = contract
             .funded_amount
-            .checked_sub(paid)
+            .checked_sub(contract.released_amount)
+            .and_then(|remaining| remaining.checked_sub(contract.refunded_amount))
             .unwrap_or_else(|| env.panic_with_error(Error::AccountingInvariantViolated));
 
         ContractSummary {
-            schema_version: CONTRACT_SUMMARY_SCHEMA_VERSION,
+            schema_version: crate::types::CONTRACT_SUMMARY_SCHEMA_VERSION,
             client: contract.client.clone(),
             freelancer: contract.freelancer.clone(),
             arbiter: contract.arbiter.clone(),
@@ -390,90 +327,57 @@ impl Escrow {
 /// before any storage is touched, so the contract remains unfinalized and
 /// retryable and a competing finalizer cannot observe a partial seal.
 ///
+/// Evaluation order is fixed so that every input maps to exactly one outcome:
+/// duplicate-work guard → contract existence → status gate → pause/emergency
+/// gate → authorization → finalizer role. The duplicate-work guard runs first
+/// on purpose: a retried or racing call always reports `AlreadyFinalized`
+/// rather than a status-dependent error, which is what makes retries
+/// idempotent for callers.
+///
 /// # Errors
-/// - `ContractNotFound` when `contract_id` is zero or unknown.
-/// - `AlreadyFinalized` when a close record already exists.
+/// - `AlreadyFinalized` when a close record already exists (checked first; no
+///   state is mutated and no event is published).
+/// - `ContractNotFound` when `contract_id` is unknown.
+/// - `InvalidStatusTransition` unless status is `Completed` or `Disputed`.
 /// - `ContractPaused` when pause controls are active.
-/// - `EmergencyActive` when emergency controls are active.
+/// - `EmergencyActive` when the emergency stop is engaged.
 /// - `UnauthorizedRole` when `finalizer` is not a contract participant.
-/// - `InvalidStatusTransition` unless status is a terminal state.
+/// - `AccountingInvariantViolated` when the derived refundable balance would
+///   underflow.
+///
+/// # Events
+/// Publishes `(Symbol "finalized", contract_id)` with `(finalizer, timestamp)`
+/// exactly once, after the record is durable.
 pub fn finalize_contract_impl(env: &Env, contract_id: u32, finalizer: Address) -> bool {
-    // ── Phase 1: preconditions ───────────────────────────────────────────
-    // Nothing below this point writes to storage.
+    // Invariant 2: reject duplicate work before anything observable happens.
+    if Escrow::is_finalized(env, contract_id) {
+        env.panic_with_error(Error::AlreadyFinalized);
+    }
 
-    let contract = Escrow::load_contract_for_finalization(&env, contract_id);
-
-    // Validate contract is in a terminal state eligible for finalization
-    let is_terminal = matches!(
-        contract.status,
-        ContractStatus::Completed
-            | ContractStatus::Disputed
-            | ContractStatus::Refunded
-            | ContractStatus::Cancelled
-    );
-    if !is_terminal {
+    let contract = Escrow::load_contract_for_finalization(env, contract_id);
+    if contract.status != ContractStatus::Completed && contract.status != ContractStatus::Disputed {
         env.panic_with_error(EscrowError::InvalidStatusTransition);
     }
 
-    // Validate accounting invariants before finalizing
-    let refundable_balance = contract
-        .funded_amount
-        .checked_sub(contract.released_amount)
-        .and_then(|a| a.checked_sub(contract.refunded_amount))
-        .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-    if refundable_balance < 0 {
-        env.panic_with_error(Error::AccountingInvariantViolated);
-    }
-
-    // For Completed contracts, verify all funds are accounted for
-    if contract.status == ContractStatus::Completed {
-        let total_accounted = contract
-            .released_amount
-            .checked_add(contract.refunded_amount)
-            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-        if total_accounted != contract.funded_amount {
-            env.panic_with_error(Error::AccountingInvariantViolated);
-        }
-    }
-
-    // For Refunded and Cancelled contracts, verify full refund
-    if contract.status == ContractStatus::Refunded || contract.status == ContractStatus::Cancelled {
-        if contract.refunded_amount != contract.funded_amount {
-            env.panic_with_error(Error::AccountingInvariantViolated);
-        }
-    }
-
-    Escrow::require_not_paused(&env);
+    Escrow::require_not_paused(env);
     finalizer.require_auth();
     Escrow::require_finalizer_role(env, &contract, &finalizer);
 
-    // ── Phase 2: build and validate the close summary ────────────────────
-    // Still read-only. `summarize_contract` projects state; the reconciliation
-    // below refuses to seal anything that does not add up.
-
-    let summary = Escrow::summarize_contract(env, contract_id, &contract);
-    Escrow::require_sealable_accounting(env, &contract, &summary);
+    // Keep the closed contract entry alive for the same window as every other
+    // persistent entry it touches (the milestone vector is refreshed by
+    // `summarize_contract`, which reads it through the TTL-aware loader).
+    crate::ttl::extend_contract_ttl(env, contract_id);
 
     let record = FinalizationRecord {
         finalizer: finalizer.clone(),
         timestamp: env.ledger().timestamp(),
-        summary,
+        summary: Escrow::summarize_contract(env, contract_id, &contract),
     };
 
-    // ── Phase 3: commit ──────────────────────────────────────────────────
-    // Every check has passed. The steps below cannot panic, so the seal and
-    // the event are always committed together or not at all.
-
-    let key = Escrow::finalization_key(contract_id);
-    env.storage().persistent().set(&key, &record);
-
-    // The close record is the `is_finalized` flag for the whole contract, so it
-    // must live as long as the entries it summarizes. Without this the seal
-    // would inherit the bare minimum TTL and could lapse, silently re-opening
-    // every mutation it closed off and allowing a second, conflicting seal.
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_TTL_LEDGERS);
+    // Invariant 1 + 3: the record is written once and immediately given the
+    // full persistent window so the guard cannot expire early.
+    crate::settlement::write_finalization(env, contract_id, &record);
+    crate::ttl::extend_finalization_ttl(env, contract_id);
 
     // A disputed contract carries a pre-dispute snapshot that `rollback_dispute`
     // would restore while the dispute is still untouched. Finalization is a
@@ -500,18 +404,15 @@ pub fn finalize_contract_impl(env: &Env, contract_id: u32, finalizer: Address) -
 
 /// Return immutable close metadata for `contract_id`, if it has been finalized.
 ///
-/// Reading a seal renews it, matching the read path of the contract and
-/// milestone entries.  This keeps the immutability flag alive for as long as
-/// anyone is still reading the record that backs it.
+/// Reading the record refreshes its TTL, so indexers that poll it keep the
+/// closed contract from ever looking unfinalized (invariant 3).
 pub fn get_finalization_record_impl(env: &Env, contract_id: u32) -> Option<FinalizationRecord> {
-    let key = Escrow::finalization_key(contract_id);
-    let record: Option<FinalizationRecord> = env.storage().persistent().get(&key);
+    let record: Option<FinalizationRecord> = env
+        .storage()
+        .persistent()
+        .get(&Escrow::finalization_key(contract_id));
     if record.is_some() {
-        env.storage().persistent().extend_ttl(
-            &key,
-            PERSISTENT_BUMP_THRESHOLD,
-            PERSISTENT_TTL_LEDGERS,
-        );
+        crate::ttl::extend_finalization_ttl(env, contract_id);
     }
     record
 }
