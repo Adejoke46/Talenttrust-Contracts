@@ -3013,7 +3013,7 @@ impl Escrow {
     /// entries; corrupted index slots are skipped without host traps. Read-only:
     /// never writes reputation data or version markers.
     pub fn get_reputations_page(env: Env, start: u32, limit: u32) -> Vec<types::ReputationEntry> {
-        let limit = limit.min(PAGE_CEILING);
+        let limit = crate::constants::normalize_page_limit(limit);
         if limit == 0 {
             return Vec::new(&env);
         }

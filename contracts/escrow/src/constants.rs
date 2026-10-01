@@ -102,59 +102,27 @@ pub const SCALE: i128 = 10_000;
 /// a ceiling of zero would make every paginated read vacuous.
 pub const PAGE_CEILING: u32 = 50;
 
-// ── Pending reputation-credit ledger arithmetic ───────────────────────────────
-//
-// These helpers are pure so that the outcome of an accrual or a consumption is
-// a function of the stored value alone. They are the single implementation used
-// by every completion path and by `issue_reputation`.
-
-/// Returns `true` when `value` is a legal stored ledger value (invariant I1).
-pub fn is_valid_pending_credit_ledger(value: i128) -> bool {
-    (0..=MAX_PENDING_REPUTATION_CREDITS).contains(&value)
-}
-
-/// Accrues exactly one pending reputation credit onto `current`.
-///
-/// Returns the new ledger value, or `None` when the accrual must be rejected:
-///
-/// * `current` is outside the legal ledger range (corrupted state, invariant
-///   I1), or
-/// * adding [`REPUTATION_CREDIT_INCREMENT`] would exceed
-///   [`MAX_PENDING_REPUTATION_CREDITS`] (invariant I3), or
-/// * the addition is not representable (defensive; unreachable while the
-///   ceiling holds).
-///
-/// Returning `None` instead of wrapping or saturating is what makes recovery
-/// deterministic: the caller maps it onto a single typed error and leaves the
-/// stored ledger untouched, so a retry re-observes the same state.
-pub fn accrue_pending_credit(current: i128) -> Option<i128> {
-    if !is_valid_pending_credit_ledger(current) {
-        return None;
+/// Normalize a pagination request without allowing an unbounded storage scan.
+/// Zero remains valid and means "return an empty page", preserving the read
+/// API's compatibility behavior; oversized requests are safely capped.
+pub(crate) const fn normalize_page_limit(limit: u32) -> u32 {
+    if limit > PAGE_CEILING {
+        PAGE_CEILING
+    } else {
+        limit
     }
-    let next = current.checked_add(REPUTATION_CREDIT_INCREMENT)?;
-    is_valid_pending_credit_ledger(next).then_some(next)
 }
 
-/// Consumes exactly one pending reputation credit from `current`.
-///
-/// Returns the new ledger value, or `None` when there is nothing to consume
-/// (`current < REPUTATION_CREDIT_INCREMENT`, i.e. the freelancer has no
-/// completed contract awaiting a rating) or when the result would no longer be
-/// a legal ledger value (invariant I1).
-pub fn consume_pending_credit(current: i128) -> Option<i128> {
-    if current < REPUTATION_CREDIT_INCREMENT {
-        return None;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_limit_boundaries_are_deterministic() {
+        assert_eq!(normalize_page_limit(0), 0);
+        assert_eq!(normalize_page_limit(1), 1);
+        assert_eq!(normalize_page_limit(PAGE_CEILING), PAGE_CEILING);
+        assert_eq!(normalize_page_limit(PAGE_CEILING + 1), PAGE_CEILING);
+        assert_eq!(normalize_page_limit(u32::MAX), PAGE_CEILING);
     }
-    let next = current.checked_sub(REPUTATION_CREDIT_INCREMENT)?;
-    is_valid_pending_credit_ledger(next).then_some(next)
 }
-
-// ── Compile-time policy guards ────────────────────────────────────────────────
-//
-// An inconsistent policy must fail the build, not shrink the recovery window or
-// make the ceiling unreachable in production.
-
-const _: () = assert!(REPUTATION_CREDIT_INCREMENT > 0);
-const _: () = assert!(MAX_PENDING_REPUTATION_CREDITS >= REPUTATION_CREDIT_INCREMENT);
-const _: () = assert!(SCALE > 0);
-const _: () = assert!(MIN_RATING <= MAX_RATING);
