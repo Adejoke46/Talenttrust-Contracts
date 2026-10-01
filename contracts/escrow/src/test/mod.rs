@@ -60,6 +60,8 @@ mod test_pause_scope;
 // mod settlement_overflow;
 mod storage_validation;
 mod event_assertions;
+mod lib_validation_boundaries;
+mod lifecycle_invariants;
 mod governance_proposal;
 mod keys_validation;
 mod simulate_create_contract;
