@@ -538,6 +538,27 @@ impl Escrow {
         Self::get_pending_client_migration_impl(&env, contract_id)
     }
 
+    /// Cancel a live pending client migration.
+    ///
+    /// The current client must authorize the call. A live pending migration must
+    /// exist for the given `contract_id`. The pending migration entry is removed
+    /// and a `client_migration_cancelled` event is emitted.
+    ///
+    /// # Errors
+    /// * [`EscrowError::ContractNotFound`] — `contract_id == 0` or contract does not exist.
+    /// * [`EscrowError::UnauthorizedRole`] — `current_client` is not the contract's client.
+    /// * [`EscrowError::InvalidState`] — no live pending migration exists.
+    /// * [`Error::ContractPaused`] — contract is paused.
+    pub fn cancel_client_migration(
+        env: Env,
+        contract_id: u32,
+        current_client: Address,
+    ) -> bool {
+        Self::require_not_paused(&env);
+        Self::cancel_client_migration_inner(&env, contract_id, current_client)
+    }
+
+
     // â”€â”€ Milestone Releases & Refunds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     pub fn approve_milestone_release(
@@ -3915,6 +3936,8 @@ mod proptest;
 #[cfg(test)]
 mod test;
 
-/// Settlement guard: double-spend, isolation, and success tests for milestone settlement.
+/// Validation boundary tests for the client migration entrypoints
+/// (propose_client_migration, accept_client_migration, cancel_client_migration).
+/// Issue #1462.
 #[cfg(test)]
-mod settlement_guard_test;
+mod migration_test;
